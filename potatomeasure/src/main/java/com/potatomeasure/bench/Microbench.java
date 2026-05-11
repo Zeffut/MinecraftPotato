@@ -13,7 +13,10 @@ import java.util.Random;
 
 public final class Microbench {
 
-    public enum Workload { SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT, BULK_WRITES_NO_READ, CHUNK_LOAD_COLD }
+    public enum Workload {
+        SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT, BULK_WRITES_NO_READ, CHUNK_LOAD_COLD,
+        GAMEPLAY_PLAYER_PACE, GAMEPLAY_EXPLORATION, EXPLOSION_BURST, WORLDGEN_STREAMING
+    }
     public enum Engine { POTATO, VANILLA }
 
     public record Result(
@@ -62,6 +65,10 @@ public final class Microbench {
                 case FULL_CHUNK_RELIGHT -> fullChunkRelight(world, rng);
                 case BULK_WRITES_NO_READ -> bulkWritesNoRead(world, rng);
                 case CHUNK_LOAD_COLD -> chunkLoadCold(world, rng);
+                case GAMEPLAY_PLAYER_PACE -> gameplayPlayerPace(world, rng);
+                case GAMEPLAY_EXPLORATION -> gameplayExploration(world, rng);
+                case EXPLOSION_BURST -> explosionBurst(world, rng);
+                case WORLDGEN_STREAMING -> worldgenStreaming(world, rng);
             }
         };
         if (engine == Engine.VANILLA) PotatoMCBridge.runBypassed(task);
@@ -187,6 +194,99 @@ public final class Microbench {
             world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
         }
         world.getLightLevel(LightType.BLOCK, new BlockPos(0, 108, 0));
+    }
+
+    // ===== Realistic gameplay workloads =====================================
+
+    private static void gameplayPlayerPace(ServerWorld world, Random rng) {
+        int cx = rng.nextInt(8) - 4;
+        int cz = rng.nextInt(8) - 4;
+        int cy = 100;
+        for (int i = 0; i < 10; i++) {
+            BlockPos pos = new BlockPos(cx + rng.nextInt(8) - 4, cy + rng.nextInt(4), cz + rng.nextInt(8) - 4);
+            boolean placing = rng.nextBoolean();
+            world.setBlockState(pos, placing ? Blocks.STONE.getDefaultState() : Blocks.AIR.getDefaultState(), 2);
+            world.getLightLevel(LightType.BLOCK, pos.up());
+        }
+    }
+
+    private static int explorationCounter = 0;
+    private static void gameplayExploration(ServerWorld world, Random rng) {
+        int counter = explorationCounter++;
+        // Sweep across the always-forceloaded -8..8 chunk band at spawn.
+        // Simulates a player walking and sampling sky+block light at many points
+        // per "view" — what happens as the renderer queries chunks the player can
+        // see. We can't forceload new chunks here (main-thread deadlock), so we
+        // pick a moving region inside the pre-loaded area to mirror "fresh look"
+        // behaviour: different chunks per iteration -> different cold sections.
+        // forceload -8..8 covers chunks (-1,-1)..(0,0). Stay strictly inside.
+        int cx = -1 + (counter % 2);
+        int cz = -1 + ((counter / 2) % 2);
+        for (int dx = 0; dx < 16; dx += 3) {
+            for (int dz = 0; dz < 16; dz += 3) {
+                BlockPos pos = new BlockPos((cx << 4) + dx, 80 + rng.nextInt(40), (cz << 4) + dz);
+                world.getLightLevel(LightType.BLOCK, pos);
+                world.getLightLevel(LightType.SKY, pos);
+            }
+        }
+    }
+
+    private static void explosionBurst(ServerWorld world, Random rng) {
+        // Stay inside chunks -1..0 (forceload -8..8). Center within [-8,7] in
+        // each axis, sphere radius 4 -> reaches [-12..11]; light BFS up to 15
+        // more blocks. We accept some light queries straddling chunk +/-1
+        // (always-loaded by chunk ticket from forceload).
+        int cx = rng.nextInt(12) - 6, cy = 100, cz = rng.nextInt(12) - 6;
+        int r = 4;
+        java.util.List<BlockPos> placed = new java.util.ArrayList<>();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (dx*dx + dy*dy + dz*dz <= r*r) {
+                        BlockPos pos = new BlockPos(cx + dx, cy + dy, cz + dz);
+                        world.setBlockState(pos, Blocks.STONE.getDefaultState(), 2);
+                        placed.add(pos);
+                    }
+                }
+            }
+        }
+        for (BlockPos pos : placed) {
+            world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+        }
+        world.getLightLevel(LightType.BLOCK, new BlockPos(cx + r + 1, cy, cz));
+        world.getLightLevel(LightType.SKY, new BlockPos(cx, cy + r + 1, cz));
+    }
+
+    private static int worldgenCounter = 0;
+    private static void worldgenStreaming(ServerWorld world, Random rng) {
+        int counter = worldgenCounter++;
+        // Simulates server processing chunk activation across multiple Y
+        // layers as new chunks "stream in". We can't forceload new chunks
+        // from inside the bench tick (main-thread deadlock), so we sweep
+        // Y layers within the preloaded -8..8 chunk band (chunks -1..0).
+        // Each iter places 9 glowstones across 3 Y layers in a 3x3 grid,
+        // exercising the full sky+block light propagation per layer — the
+        // work the server does each tick when chunks transition to FULL.
+        int baseCx = -1 + (counter % 2);
+        int baseCz = -1 + ((counter / 2) % 2);
+        int yOff = 70 + ((counter * 3) % 60);
+        java.util.List<BlockPos> placed = new java.util.ArrayList<>();
+        for (int dy = 0; dy < 3; dy++) {
+            for (int dx = 0; dx < 3; dx++) {
+                for (int dz = 0; dz < 3; dz++) {
+                    int x = (baseCx << 4) + dx * 5 + 1;
+                    int z = (baseCz << 4) + dz * 5 + 1;
+                    BlockPos pos = new BlockPos(x, yOff + dy * 8, z);
+                    world.setBlockState(pos, Blocks.GLOWSTONE.getDefaultState(), 2);
+                    placed.add(pos);
+                    world.getLightLevel(LightType.BLOCK, pos);
+                    world.getLightLevel(LightType.SKY, pos);
+                }
+            }
+        }
+        for (BlockPos pos : placed) {
+            world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+        }
     }
 
     public static Map<String, Object> resultToJson(Result r) {

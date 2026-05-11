@@ -24,6 +24,7 @@ public final class HarnessHandlers {
         bind.accept("/validate", HarnessHandlers::handleValidate);
         bind.accept("/shutdown", HarnessHandlers::handleShutdown);
         bind.accept("/bench/micro", HarnessHandlers::handleBenchMicro);
+        bind.accept("/bench/realistic", HarnessHandlers::handleBenchRealistic);
         bind.accept("/memory", HarnessHandlers::handleMemory);
         bind.accept("/gc", HarnessHandlers::handleGc);
     }
@@ -115,6 +116,60 @@ public final class HarnessHandlers {
                 out.put("speedup_potato_over_vanilla", speedup);
                 return out;
             }, 300_000);
+            HarnessServer.respond(ex, 200, Json.write(body));
+        } catch (Exception e) {
+            HarnessServer.respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    private static void handleBenchRealistic(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"POST required\"}");
+            return;
+        }
+        if (!ServerHolder.isReady()) {
+            HarnessServer.respond(ex, 503, "{\"error\":\"server not ready\"}");
+            return;
+        }
+        Map<String, Object> req = Json.parseObject(HarnessServer.readBody(ex));
+        int iterations = req.get("iterations") instanceof Number n ? n.intValue() : 50;
+        long seed = req.get("seed") instanceof Number n ? n.longValue() : 42L;
+
+        com.potatomeasure.bench.Microbench.Workload[] wls = new com.potatomeasure.bench.Microbench.Workload[] {
+            com.potatomeasure.bench.Microbench.Workload.GAMEPLAY_PLAYER_PACE,
+            com.potatomeasure.bench.Microbench.Workload.GAMEPLAY_EXPLORATION,
+            com.potatomeasure.bench.Microbench.Workload.EXPLOSION_BURST,
+            com.potatomeasure.bench.Microbench.Workload.WORLDGEN_STREAMING
+        };
+
+        try {
+            final int fIters = iterations;
+            final long fSeed = seed;
+            Map<String, Object> body = ServerHolder.submitAndWait(() -> {
+                ServerWorld world = ServerHolder.get().getOverworld();
+                java.util.List<Map<String, Object>> results = new java.util.ArrayList<>();
+                for (com.potatomeasure.bench.Microbench.Workload wl : wls) {
+                    var rPotato = com.potatomeasure.bench.Microbench.run(world, wl,
+                        com.potatomeasure.bench.Microbench.Engine.POTATO, fIters, fSeed);
+                    var rVanilla = com.potatomeasure.bench.Microbench.run(world, wl,
+                        com.potatomeasure.bench.Microbench.Engine.VANILLA, fIters, fSeed);
+                    Map<String, Object> one = new LinkedHashMap<>();
+                    one.put("workload", wl.name());
+                    one.put("iterations", fIters);
+                    one.put("seed", fSeed);
+                    one.put("potato", com.potatomeasure.bench.Microbench.resultToJson(rPotato));
+                    one.put("vanilla", com.potatomeasure.bench.Microbench.resultToJson(rVanilla));
+                    double speedup = rPotato.totalNanos() > 0
+                        ? (double) rVanilla.totalNanos() / (double) rPotato.totalNanos()
+                        : 0.0;
+                    one.put("speedup_potato_over_vanilla", speedup);
+                    results.add(one);
+                }
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("realistic", true);
+                out.put("workloads", results);
+                return out;
+            }, 1_800_000);
             HarnessServer.respond(ex, 200, Json.write(body));
         } catch (Exception e) {
             HarnessServer.respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");

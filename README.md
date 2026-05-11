@@ -26,6 +26,30 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
 - 🚧 Comparatif Starlight / Phosphor (à venir)
 
+### Realistic gameplay bench — v0.2-wip (seed=42, 2026-05-11)
+
+> Cible : workloads qui reflètent ce qu'un joueur fait réellement, pas du stress CPU synthétique.
+> 50 itérations par workload, après warmup, M-series 10 cœurs. Honnête (pas de cherry-picking) :
+> v1 n'a pas encore de gain user-visible vs vanilla sur ces patterns.
+
+| Workload                | Potato ops/s | Vanilla ops/s | Speedup | Potato p50 (µs) | Vanilla p50 (µs) |
+|-------------------------|-------------:|--------------:|--------:|----------------:|-----------------:|
+| `gameplay_player_pace`  |          617 |        50 221 |   0.012× |          1 499 |               17 |
+| `gameplay_exploration`  |          117 |       318 804 |  0.0004× |          7 926 |                3 |
+| `explosion_burst`       |          375 |         2 284 |   0.164× |          2 434 |              394 |
+| `worldgen_streaming`    |           65 |        16 938 |   0.004× |         15 561 |               55 |
+
+Best : `explosion_burst` (0.16×). Pire : `gameplay_exploration` (0.0004×). Les workloads
+dominés par les **lectures** dans des sections chaudes paient le coût d'import vanilla→potato
+sans amortir. L'`explosion_burst` mélange writes+reads et se rapproche le plus de vanilla —
+c'est la piste pour v1 (batching deferred des writes).
+
+Reproduce :
+
+```bash
+./scripts/test-bench-realistic.sh
+```
+
 ### Constrained-environment bench — v0.2-wip (seed=42, 2026-05-11)
 
 > Cible réaliste : free hosting / Aternos / VPS bon marché. `runServerLimited` boote le serveur avec
