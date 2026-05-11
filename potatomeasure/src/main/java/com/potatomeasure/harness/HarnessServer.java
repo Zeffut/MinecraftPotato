@@ -17,18 +17,33 @@ import java.util.concurrent.Executors;
 public final class HarnessServer {
 
     private static volatile HttpServer http;
+    private static volatile boolean prodMode = false;
 
     private HarnessServer() {}
 
     public static void startIfEnabled() {
-        if (!"true".equals(System.getProperty("potatomc.dev"))) {
-            PotatoMeasure.LOGGER.info("[harness] dev flag absent — HTTP harness disabled");
+        boolean dev = "true".equalsIgnoreCase(System.getProperty("potatomc.harness.dev"))
+            || "true".equalsIgnoreCase(System.getProperty("potatomc.dev"));
+        boolean prod = "true".equalsIgnoreCase(System.getProperty("potatomc.harness.prod"));
+        String prodToken = System.getProperty("potatomc.harness.token");
+
+        if (!dev && !prod) {
+            PotatoMeasure.LOGGER.info("[harness] OFF (set -Dpotatomc.harness.dev=true for local dev, "
+                + "or -Dpotatomc.harness.prod=true -Dpotatomc.harness.token=<TOKEN> for production)");
+            return;
+        }
+        if (prod && (prodToken == null || prodToken.isEmpty())) {
+            PotatoMeasure.LOGGER.error("[harness] PROD mode requires -Dpotatomc.harness.token=<TOKEN>");
             return;
         }
         if (http != null) return;
+
+        prodMode = prod && !dev;
+        String bind = prodMode ? "0.0.0.0" : "127.0.0.1";
         int port = Integer.parseInt(System.getProperty("potatomc.harness.port", "25585"));
+
         try {
-            http = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+            http = HttpServer.create(new InetSocketAddress(bind, port), 0);
             http.setExecutor(Executors.newFixedThreadPool(4, r -> {
                 Thread t = new Thread(r, "potato-harness-http");
                 t.setDaemon(true);
@@ -37,7 +52,8 @@ public final class HarnessServer {
             register("/health", HarnessServer::handleHealth);
             HarnessHandlers.bindAll(HarnessServer::register);
             http.start();
-            PotatoMeasure.LOGGER.info("[harness] listening on 127.0.0.1:{}", port);
+            String mode = prodMode ? "PROD (0.0.0.0, token auth)" : "DEV (localhost, no auth)";
+            PotatoMeasure.LOGGER.info("[harness] listening on {}:{} — mode: {}", bind, port, mode);
         } catch (IOException e) {
             PotatoMeasure.LOGGER.error("[harness] failed to start", e);
         }
@@ -51,8 +67,26 @@ public final class HarnessServer {
         }
     }
 
+    public static boolean isProdMode() {
+        return prodMode;
+    }
+
     private static void register(String path, HttpHandler h) {
-        http.createContext(path, wrap(h));
+        http.createContext(path, wrap(authWrap(h)));
+    }
+
+    private static HttpHandler authWrap(HttpHandler inner) {
+        return exchange -> {
+            if (prodMode) {
+                String auth = exchange.getRequestHeaders().getFirst("Authorization");
+                String expected = "Bearer " + System.getProperty("potatomc.harness.token");
+                if (auth == null || !auth.equals(expected)) {
+                    respond(exchange, 401, "{\"error\":\"unauthorized\"}");
+                    return;
+                }
+            }
+            inner.handle(exchange);
+        };
     }
 
     private static HttpHandler wrap(HttpHandler inner) {
@@ -74,8 +108,11 @@ public final class HarnessServer {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", "ok");
         body.put("mc_version", net.minecraft.SharedConstants.getGameVersion().name());
-        body.put("mod_version", "0.1.0");
+        body.put("mod_version", "1.0.0");
         body.put("server_ready", ServerHolder.isReady());
+        body.put("mode", prodMode ? "prod" : "dev");
+        long uptimeMs = java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime();
+        body.put("uptime_ms", uptimeMs);
         respond(ex, 200, Json.write(body));
     }
 

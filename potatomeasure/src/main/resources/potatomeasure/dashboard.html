@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PotatoMC Dashboard</title>
+<style>
+body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; max-width: 1100px; margin: 2em auto; padding: 1em; }
+h1 { color: #f4a261; }
+h3 { color: #f4a261; margin-top: 0; }
+.card { background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 1em; margin: 0.5em 0; }
+.row { display: flex; gap: 1em; flex-wrap: wrap; }
+.col { flex: 1; min-width: 280px; }
+.metric { font-size: 1.8em; font-weight: bold; color: #6ee7b7; }
+.label { font-size: 0.9em; color: #888; }
+pre { background: #000; padding: 0.5em; overflow: auto; max-height: 200px; font-size: 0.8em; }
+.bad { color: #f87171; }
+.warn { color: #fbbf24; }
+.good { color: #6ee7b7; }
+hr { border: none; border-top: 1px solid #333; }
+input { background: #000; color: #e0e0e0; border: 1px solid #333; padding: 0.3em; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>PotatoMC Dashboard</h1>
+<div class="card">
+  Token (prod mode): <input id="token-input" type="password" placeholder="paste bearer token (optional in dev)">
+  <button onclick="saveToken()">apply</button>
+</div>
+<div id="status" class="card">Loading…</div>
+<div class="row">
+  <div class="col card">
+    <h3>Memory</h3>
+    <div class="metric" id="heap_used">—</div><div class="label">heap used (MB)</div>
+    <hr>
+    <div id="memory_stats"></div>
+  </div>
+  <div class="col card">
+    <h3>Performance</h3>
+    <div class="metric" id="tps">—</div><div class="label">TPS</div>
+    <div class="metric" id="mspt">—</div><div class="label">ms/tick</div>
+  </div>
+  <div class="col card">
+    <h3>Modules</h3>
+    <div id="modules"></div>
+  </div>
+</div>
+<div class="card">
+  <h3>Server logs (last 100 lines)</h3>
+  <pre id="logs">Loading…</pre>
+</div>
+<script>
+let token = new URLSearchParams(location.search).get('token') || localStorage.getItem('potatomc_token') || '';
+document.getElementById('token-input').value = token;
+function saveToken() {
+  token = document.getElementById('token-input').value;
+  localStorage.setItem('potatomc_token', token);
+  refresh();
+}
+function headers() { return token ? { 'Authorization': 'Bearer ' + token } : {}; }
+async function fetchJson(path) {
+  const r = await fetch(path, { headers: headers() });
+  if (!r.ok) throw new Error(path + ': ' + r.status);
+  return r.json();
+}
+async function refresh() {
+  try {
+    const [health, mem, tps, stats] = await Promise.all([
+      fetchJson('/health'), fetchJson('/memory'), fetchJson('/tps'), fetchJson('/stats')
+    ]);
+    document.getElementById('status').textContent =
+      'MC ' + health.mc_version + ' · mod ' + health.mod_version + ' · server_ready=' + health.server_ready + ' · mode=' + (health.mode || '?') + ' · uptime=' + Math.round((health.uptime_ms||0)/1000) + 's';
+    document.getElementById('heap_used').textContent = mem.heap_used_mb;
+    const mstats = [];
+    mstats.push('<div>heap total: <b>' + mem.heap_total_mb + ' MB</b></div>');
+    mstats.push('<div>heap max: <b>' + mem.heap_max_mb + ' MB</b></div>');
+    if (stats.memory) {
+      for (const k of Object.keys(stats.memory)) mstats.push('<div>' + k + ': <b>' + stats.memory[k] + '</b></div>');
+    }
+    document.getElementById('memory_stats').innerHTML = mstats.join('');
+    document.getElementById('tps').textContent = (tps.tps || 0).toFixed(2);
+    document.getElementById('mspt').textContent = (tps.mean_mspt || 0).toFixed(2);
+    const mods = [
+      stats.lighting_active ? '<span class="good">[x] Lighting</span>' : '<span class="label">[ ] Lighting (opt-in)</span>',
+      stats.memory_active ? '<span class="good">[x] Memory</span>' : '<span class="bad">[ ] Memory</span>',
+    ];
+    document.getElementById('modules').innerHTML = mods.join('<br>');
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="bad">' + e.message + '</span>';
+  }
+  try {
+    const r = await fetch('/logs/tail', { headers: headers() });
+    document.getElementById('logs').textContent = await r.text();
+  } catch (e) {
+    document.getElementById('logs').textContent = '(logs unavailable: ' + e.message + ')';
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

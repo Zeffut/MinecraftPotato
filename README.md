@@ -1,10 +1,55 @@
 # PotatoMC 🥔
 
-**Mod d'optimisation extrême pour Minecraft 1.21.11 (Fabric).**
+**Server Operator Toolkit + RAM Savings for Fabric 1.21.11.**
 
-Ambition : remplacer à terme l'écosystème Sodium + Lithium + FerriteCore + Starlight + Krypton par un mod unifié, conçu pour des configs ultra légères sans sacrifier les configs musclées.
+PotatoMC is positioned as a **server admin's swiss-army knife** for headless Minecraft servers, not a raw-perf optimization mod. Vanilla 1.21.x has caught up to the Starlight/Lithium-era optimizations and there is little universal MSPT/TPS left to win in pure code. Where PotatoMC stands out:
 
-## État actuel — v0.2.0-beta (pivot)
+- **HTTP control plane** with two security modes — DEV (localhost, no auth) and PROD (0.0.0.0, bearer token auth) — for remote command execution, server stats, light queries, programmatic benchmarks, and graceful shutdown.
+- **HTML dashboard** at `GET /` — live memory / TPS / module state, dark theme, single page, no framework, token-aware.
+- **Programmatic bench harness** — `/bench/micro` and `/bench/realistic` for reproducible head-to-head measurements vs vanilla (use it to benchmark other mods too).
+- **Memory module** (`PropertyMapInterner` + `NbtKeyInterner`, default ON) — historically -17 MB heap vs vanilla; current bench is within noise on synthetic loads but the dedup is cheap and expected to pay off on entity-heavy servers.
+- **Modular architecture** — each module independently opt-in / opt-out via JVM flags.
+
+**Nothing comparable** exists on Modrinth for Fabric 1.21.11: no single mod ships a comprehensive remote HTTP control + monitoring stack with token auth + dashboard.
+
+## Enabling the harness
+
+```bash
+# Local dev (localhost, no auth) — default port 25585
+-Dpotatomc.harness.dev=true
+
+# Production (binds 0.0.0.0, requires Authorization: Bearer <TOKEN>)
+-Dpotatomc.harness.prod=true -Dpotatomc.harness.token=<TOKEN>
+
+# Optional port override (default 25585)
+-Dpotatomc.harness.port=25585
+```
+
+Open `http://<host>:25585/` in a browser. In PROD mode, paste the token in the dashboard's input or pass `?token=<TOKEN>` in the URL.
+
+### Endpoints
+
+| Path | Method | Notes |
+|---|---|---|
+| `/` | GET | HTML dashboard |
+| `/health` | GET | `mc_version`, `mod_version`, `server_ready`, `mode`, `uptime_ms` |
+| `/memory` | GET | heap stats + GC counters |
+| `/tps` | GET | mean/max mspt, samples, entity tick stats |
+| `/stats` | GET | module activation + interner stats |
+| `/cmd` | POST `{"command":"..."}` | run a server console command |
+| `/light/X/Y/Z` | GET | inspect block/sky light (cross-engine compare) |
+| `/validate` | POST `{"center":[x,y,z],"radius":N}` | bit-exact light validation |
+| `/bench/micro` | POST `{"workload":"...","iterations":N,"seed":S}` | head-to-head micro-bench |
+| `/bench/realistic` | POST `{"iterations":N,"seed":S}` | realistic gameplay workload sweep |
+| `/memory` / `/gc` | GET / POST | heap + force GC |
+| `/shutdown` | POST | graceful server stop |
+| `/logs/tail` | GET | last 100 lines (placeholder in v1.0.0) |
+
+## Modules
+
+The raw-perf optimizations remain in the repo as opt-in modules — useful for the configs where vanilla still pays a cost, and for the bench harness as a labo.
+
+## État précédent — v0.2.1-beta
 
 **Le mod ne dégrade plus les perfs vs vanilla.**
 

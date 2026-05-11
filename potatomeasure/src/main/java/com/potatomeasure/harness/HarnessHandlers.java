@@ -9,6 +9,9 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.LightType;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -17,7 +20,11 @@ public final class HarnessHandlers {
 
     private HarnessHandlers() {}
 
+    private static volatile String DASHBOARD_HTML = null;
+
     public static void bindAll(BiConsumer<String, HttpHandler> bind) {
+        bind.accept("/", HarnessHandlers::handleDashboard);
+        bind.accept("/logs/tail", HarnessHandlers::handleLogsTail);
         bind.accept("/cmd", HarnessHandlers::handleCmd);
         bind.accept("/light/", HarnessHandlers::handleLight);
         bind.accept("/stats", HarnessHandlers::handleStats);
@@ -28,6 +35,42 @@ public final class HarnessHandlers {
         bind.accept("/memory", HarnessHandlers::handleMemory);
         bind.accept("/gc", HarnessHandlers::handleGc);
         bind.accept("/tps", HarnessHandlers::handleTps);
+    }
+
+    private static void handleDashboard(HttpExchange ex) throws IOException {
+        // Only serve dashboard for exact "/" path; reject other unhandled paths with 404.
+        String path = ex.getRequestURI().getPath();
+        if (!"/".equals(path) && !path.isEmpty()) {
+            HarnessServer.respond(ex, 404, "{\"error\":\"not found\"}");
+            return;
+        }
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"GET required\"}");
+            return;
+        }
+        if (DASHBOARD_HTML == null) {
+            try (InputStream is = HarnessHandlers.class.getResourceAsStream("/potatomeasure/dashboard.html")) {
+                DASHBOARD_HTML = is == null
+                    ? "<h1>Dashboard resource missing</h1>"
+                    : new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+        byte[] bytes = DASHBOARD_HTML.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+        ex.sendResponseHeaders(200, bytes.length);
+        try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
+    }
+
+    private static void handleLogsTail(HttpExchange ex) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"GET required\"}");
+            return;
+        }
+        String body = "(log tailing not implemented in v1.0.0)";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+        ex.sendResponseHeaders(200, bytes.length);
+        try (OutputStream out = ex.getResponseBody()) { out.write(bytes); }
     }
 
     private static void handleTps(HttpExchange ex) throws IOException {
