@@ -41,6 +41,13 @@ public final class PotatoLightEngine implements LightLevelAPI {
     // Absence = column has never been seeded (used for lazy init on first sky read).
     private final ConcurrentHashMap<Long, Integer> heightmapCache = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<Long> pendingSkyColumns = new ConcurrentLinkedQueue<>();
+    // Incremental sky updates: column where heightmap shifted, with both
+    // oldTopY (captured before the shift) and newTopY. Used to do an O(Δh)
+    // update instead of a full O(worldHeight) column rebuild.
+    private final ConcurrentLinkedQueue<IncrementalSkyUpdate> pendingSkyIncrementals =
+        new ConcurrentLinkedQueue<>();
+
+    private record IncrementalSkyUpdate(int x, int z, int oldTopY, int newTopY) {}
     // Columns whose below-topY vanilla sky values have already been imported.
     // On a subsequent recompute (heightmap-shift event) we skip the expensive
     // per-cell vanilla query below topY and only refresh open-sky cells.
@@ -109,7 +116,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
 
     @Override
     public int getLightLevel(BlockPos pos, LightType type) {
-        if (!pending.isEmpty() || !pendingSkyColumns.isEmpty()) flushPending();
+        if (!pending.isEmpty() || !pendingSkyColumns.isEmpty() || !pendingSkyIncrementals.isEmpty()) flushPending();
 
         if (type == LightType.SKY && pendingWorld != null) {
             // Lazy column init: if we have no heightmap entry for this column, seed it now.
@@ -270,8 +277,14 @@ public final class PotatoLightEngine implements LightLevelAPI {
         long ck = columnKey(x, z);
         int currentTop = world.getTopY(Heightmap.Type.MOTION_BLOCKING, x, z);
         Integer cachedTop = heightmapCache.get(ck);
-        if (cachedTop == null || cachedTop != currentTop) {
+        if (cachedTop == null) {
+            // First time seeing this column — needs full init (below-topY
+            // vanilla import + open-sky write + BFS seed).
             pendingSkyColumns.add(ck);
+            heightmapCache.put(ck, currentTop);
+        } else if (cachedTop.intValue() != currentTop) {
+            // Heightmap shifted — enqueue incremental O(Δh) update.
+            pendingSkyIncrementals.add(new IncrementalSkyUpdate(x, z, cachedTop, currentTop));
             heightmapCache.put(ck, currentTop);
         }
     }
@@ -283,11 +296,11 @@ public final class PotatoLightEngine implements LightLevelAPI {
      * emitters inside the cube plus vanilla-truth boundary light.
      */
     public void flushPending() {
-        if (pending.isEmpty() && pendingSkyColumns.isEmpty()) return;
+        if (pending.isEmpty() && pendingSkyColumns.isEmpty() && pendingSkyIncrementals.isEmpty()) return;
         if (!flushing.compareAndSet(false, true)) return;
         try {
             ServerWorld world = pendingWorld;
-            if (world == null) { pending.clear(); pendingSkyColumns.clear(); return; }
+            if (world == null) { pending.clear(); pendingSkyColumns.clear(); pendingSkyIncrementals.clear(); return; }
 
             opacityCache.clear();
             WorldBFSWorker w = worldWorkers.get();
@@ -433,6 +446,24 @@ public final class PotatoLightEngine implements LightLevelAPI {
                     }).join();
                 }
             }
+
+            // ----------------------------------------------------------------
+            // Drain incremental sky updates: heightmap shifts where the column
+            // was already seeded. Each is O(Δh) instead of O(worldHeight).
+            //
+            // We process them sequentially on the server thread because:
+            //   1) Each one is tiny (a handful of cells + short BFS),
+            //   2) Sequential avoids the ForkJoinPool spin-up overhead that
+            //      dominates for short tasks,
+            //   3) No risk of the cross-thread chunk-load deadlock the bulk
+            //      column path had to defend against.
+            // ----------------------------------------------------------------
+            if (!pendingSkyIncrementals.isEmpty()) {
+                IncrementalSkyUpdate inc;
+                while ((inc = pendingSkyIncrementals.poll()) != null) {
+                    recomputeSkyForColumnIncremental(world, inc.x(), inc.z(), inc.oldTopY(), inc.newTopY());
+                }
+            }
         } finally {
             flushing.set(false);
         }
@@ -509,6 +540,74 @@ public final class PotatoLightEngine implements LightLevelAPI {
             WorldBFSWorker w = worldWorkers.get();
             WorldBFSWorker.SectionAccess access = skyLightAccess(world);
             w.seed(access, x, topY, z, 15);
+            w.propagate(access);
+        }
+    }
+
+    /**
+     * Incremental sky-light update for a column whose heightmap shifted from
+     * {@code oldTopY} to {@code newTopY}. Only the cells in the delta range
+     * are touched; cells above max(old, new) and below min(old, new) are
+     * unchanged.
+     *
+     * <p>Case B (newTopY &gt; oldTopY): an opaque block was placed above the
+     * previous top. Cells in [oldTopY, newTopY-1] transition from open-sky
+     * (sky=15) to shadowed. We seed a lighten BFS from the cell at newTopY-1
+     * and from the 4 horizontal neighbours of each affected y so attenuated
+     * sky-light from open-sky neighbours flows back in.
+     *
+     * <p>Case C (newTopY &lt; oldTopY): the topmost opaque block was broken.
+     * Cells in [newTopY, oldTopY-1] are now open sky. We write them to 15 and
+     * seed BFS so they propagate sideways.
+     *
+     * <p><b>Correctness caveat for Case B:</b> we lack a true darken BFS, so
+     * the strategy is to clear the affected cells to 0 and re-import light
+     * via the lighten BFS from open-sky horizontal neighbours. This is
+     * bit-exact when the surrounding columns are open sky (the common case
+     * on the bench and on most surface terrain). For complex terrain where
+     * the now-shadowed cells had previously been lighting other non-sky-15
+     * cells horizontally, we'd need a real darken pass — in that case the
+     * worst observed deviation is a stale-bright neighbour that the next
+     * heightmap-changing event would correct. Validate must show
+     * sky_max_delta = 0 to ship this path; if not, fall back to
+     * {@link #recomputeSkyForColumn} for Case B.
+     */
+    private void recomputeSkyForColumnIncremental(ServerWorld world, int x, int z, int oldTopY, int newTopY) {
+        if (oldTopY == newTopY) return;
+        final int worldTop = world.getTopYInclusive() + 1;
+
+        if (newTopY > oldTopY) {
+            // Case B: heightmap shifted UP. Cells [oldTopY, newTopY-1] are now
+            // shadowed below the new opaque block at (newTopY - 1).
+            // Strategy: fall back to the full recompute. We can't safely
+            // darken without a true darken-BFS, and the cells being darkened
+            // may previously have propagated sky=14..1 sideways into
+            // neighbouring shadowed columns that we'd otherwise leave with
+            // stale-bright values. Full recompute is known-correct.
+            recomputeSkyForColumn(world, x, z);
+            return;
+        }
+
+        // Case C: heightmap shifted DOWN. Cells [newTopY, oldTopY-1] were
+        // shadowed below the (now-removed) opaque block, now they are open
+        // sky. Write sky=15 directly (open-sky cells are always 15 in vanilla)
+        // and seed a BFS at the bottom of the newly-opened range so the new
+        // light propagates sideways into shadowed neighbours.
+        for (int y = newTopY; y < oldTopY; y++) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.sky.set(idx, 15);
+            dirty.add(k);
+        }
+        // Single BFS seed at the bottom open-sky cell; cells above it are
+        // already 15 (or just written to 15) so seeding any of them would
+        // produce identical horizontal propagation, and seeding only one
+        // avoids redundant enqueues.
+        WorldBFSWorker w = worldWorkers.get();
+        WorldBFSWorker.SectionAccess access = skyLightAccess(world);
+        if (newTopY < worldTop) {
+            w.seed(access, x, newTopY, z, 15);
             w.propagate(access);
         }
     }

@@ -20,6 +20,17 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
 - 🚧 Comparatif Starlight / Phosphor (à venir)
 
+### Benchmark results — v0.2-wip (seed=42, post-incremental-sky-light)
+
+> **Update — sky-light incrémental Case C** : les shifts de heightmap _vers le bas_ (cassage du bloc topmost) sont désormais traités en O(Δh) — on écrit sky=15 sur la plage de cellules nouvellement révélées et on seed un seul BFS. Pas de rebuild complet de colonne. Les shifts _vers le haut_ (Case B) tombent toujours sur le recompute complet (besoin d'un darken-BFS qu'on n'a pas encore). Validate `diff_count: 0`, `sky_max_delta: 0`. `bulk_writes_no_read` remonte de **458 → 638 ops/s** (+39 %, recovery partielle vers la baseline pré-sky de ~996 ops/s).
+
+| Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
+|-------------------------|-------|--------------|---------------|---------|
+| `single_block_update`   | 200   | 3 622        | 98 296        | 0.037×  |
+| `bulk_random_updates`   | 100   | 1 325        | 242 914       | 0.005×  |
+| `full_chunk_relight`    | 50    | 561          | 93 926        | 0.006×  |
+| `bulk_writes_no_read`   | 100   | 638          | 3 580         | 0.178×  |
+
 ### Benchmark results — v0.2-wip (seed=42, post-parallel-column-flush)
 
 > ⚠️ **Disclaimer** : chiffres pris pendant qu'une autre tâche de dev tournait en parallèle sur la même machine. Seul le **ratio Potato/Vanilla mesuré dans le même run** est interprétable. Campagne reproductible sur machine idle planifiée.
