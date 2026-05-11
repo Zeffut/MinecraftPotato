@@ -13,10 +13,16 @@ public final class CompatGuard {
 
     public static void evaluate() {
         if (evaluated) return;
-        if ("true".equalsIgnoreCase(System.getProperty("potatomc.disabled"))
-                || "true".equalsIgnoreCase(System.getProperty("potatomc.lighting.disabled"))) {
+        boolean killSwitch = "true".equalsIgnoreCase(System.getProperty("potatomc.disabled"))
+                || "true".equalsIgnoreCase(System.getProperty("potatomc.lighting.disabled"));
+        boolean optIn = "true".equalsIgnoreCase(System.getProperty("potatomc.lighting.experimental"));
+        if (killSwitch || !optIn) {
             active = false;
-            PotatoMC.LOGGER.warn("[PotatoMC] lighting module disabled via kill-switch");
+            if (killSwitch) {
+                PotatoMC.LOGGER.warn("[PotatoMC] lighting module disabled via kill-switch");
+            } else {
+                PotatoMC.LOGGER.info("[PotatoMC] lighting module OFF by default (experimental). Set -Dpotatomc.lighting.experimental=true to enable.");
+            }
             evaluated = true;
             return;
         }
@@ -27,7 +33,7 @@ public final class CompatGuard {
                 PotatoMC.LOGGER.warn("[PotatoMC] Mod '{}' détecté — moteur lumière custom désactivé (compat)", id);
             }
         }
-        if (active) PotatoMC.LOGGER.info("[PotatoMC] Moteur lumière custom: actif");
+        if (active) PotatoMC.LOGGER.info("[PotatoMC] lighting module: ACTIVE (experimental opt-in)");
         evaluated = true;
     }
 

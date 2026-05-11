@@ -4,13 +4,31 @@
 
 Ambition : remplacer à terme l'écosystème Sodium + Lithium + FerriteCore + Starlight + Krypton par un mod unifié, conçu pour des configs ultra légères sans sacrifier les configs musclées.
 
-## État actuel — v0.2.0-beta
+## État actuel — v0.2.0-beta (pivot)
 
-**Highlights du tag actuel :**
-- ✅ **Memory module bat FerriteCore** (-17 MB vs vanilla, FerriteCore -5 MB sur le même bench ; stack potato+FerriteCore = -23 MB)
-- ✅ **Lighting engine bit-exact vs vanilla** (block + sky, validate `diff_count: 0`)
-- ✅ **Aucun moteur de lumière concurrent maintenu sur 1.21.11** (Starlight stoppé à 1.20.4)
-- ⚠️ **Lighting perf** : entre 0.08-0.36× vanilla sur workloads synthétiques (vanilla 1.21 est déjà très optimisé)
+**Le mod ne dégrade plus les perfs vs vanilla.**
+
+| Module | État par défaut | Win mesuré |
+|---|---|---|
+| **Memory** (PropertyMapInterner WeakHashMap) | ✅ ACTIF | **-17 MB heap** vs vanilla, **bat FerriteCore** (-5 MB) ; stack avec FerriteCore = -23 MB |
+| **Lighting** (custom engine bit-exact) | ⚠️ OFF par défaut (expérimental opt-in via `-Dpotatomc.lighting.experimental=true`) | Bit-exact correctness ✅, mais perf gameplay 0.0004×-0.16× vanilla → désactivé par défaut |
+
+**Pour activer le lighting expérimental** :
+```bash
+JAVA_OPTS="-Dpotatomc.lighting.experimental=true" ./gradlew :potatomc:runServer
+```
+
+### Pourquoi le lighting est désactivé par défaut
+
+Vanilla 1.21.x a énormément optimisé la lumière depuis Starlight (qui a stoppé en 1.20.4). Notre moteur custom atteint la correctness bit-exact mais paye un coût d'import vanilla→potato sur la première lecture de chaque section, qui plombe les benchs gameplay réalistes (`gameplay_exploration` : 0.0004× vanilla, `worldgen_streaming` : 0.004×).
+
+Le module reste **dans le repo** pour : la recherche, l'opt-in pour les configs où vanilla pèche, et l'utilisation comme labo (le harness `/light`, `/validate`, `/stats` reste fonctionnel pour benchmark vanilla).
+
+### Prochaines features qui visent vraiment de la perf user-visible
+
+- 🚧 Module GC pressure : string interning sur NBT tag keys + BlockPos pool
+- 🚧 Module entity AI : skip tick pour entités hors-vue (territoire Lithium, axe spécifique)
+- 🚧 /reload speedup
 
 ### Lighting engine custom
 

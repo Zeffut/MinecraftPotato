@@ -3,7 +3,7 @@
   "id": "potatomc",
   "version": "${version}",
   "name": "PotatoMC",
-  "description": "Mod d'optimisation extrême pour Minecraft — pensé pour les configs ultra légères (patate-friendly).",
+  "description": "Mod d'optimisation pour Minecraft 1.21.11 — module memory actif par défaut (bat FerriteCore), moteur de lumière custom expérimental opt-in.",
   "authors": ["tom77ds"],
   "contact": {
     "sources": "https://github.com/tom77ds/potatomc"
