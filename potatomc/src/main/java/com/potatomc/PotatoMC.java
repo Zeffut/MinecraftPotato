@@ -16,6 +16,7 @@ public final class PotatoMC implements ModInitializer {
     public void onInitialize() {
         LOGGER.info("[PotatoMC] Initialisation — optimisation extrême activée");
         CompatGuard.evaluate();
+        com.potatomc.memory.PotatoMemory.init();
         if (CompatGuard.isActive()) {
             com.potatomc.lighting.bridge.EngineHolder.set(LIGHT_ENGINE);
             // Deferred batching: drain pending block-light changes once per tick.

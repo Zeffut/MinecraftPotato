@@ -138,6 +138,23 @@ public final class PotatoMCBridge {
         } catch (Throwable t) { return Collections.emptyMap(); }
     }
 
+    /**
+     * Reflectively reads {@code PropertyMapInterner} counters and returns a
+     * snapshot map. Empty if PotatoMC isn't loaded or reflection fails.
+     */
+    public static Map<String, Long> memoryStatsSnapshot() {
+        if (!isPresent()) return Collections.emptyMap();
+        try {
+            Class<?> interner = Class.forName("com.potatomc.memory.dedup.PropertyMapInterner");
+            Map<String, Long> out = new LinkedHashMap<>();
+            out.put("property_maps_interned", (long) interner.getMethod("internedCount").invoke(null));
+            out.put("property_lookups", (long) interner.getMethod("lookupsCount").invoke(null));
+            out.put("property_hits", (long) interner.getMethod("hitsCount").invoke(null));
+            out.put("property_bytes_saved_estimate", (long) interner.getMethod("estimatedBytesSaved").invoke(null));
+            return out;
+        } catch (Throwable t) { return Collections.emptyMap(); }
+    }
+
     public static int[] validate(Object serverWorld, Object center, int radius) {
         if (!isPresent()) return null;
         try {

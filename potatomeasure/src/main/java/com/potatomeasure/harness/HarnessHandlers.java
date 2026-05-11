@@ -194,6 +194,7 @@ public final class HarnessHandlers {
         b.put("server_ready", ServerHolder.isReady());
         b.put("potatomc_present", com.potatomeasure.PotatoMCBridge.isPresent());
         b.put("flush_stats", com.potatomeasure.PotatoMCBridge.flushStatsSnapshot());
+        b.put("memory", com.potatomeasure.PotatoMCBridge.memoryStatsSnapshot());
         HarnessServer.respond(ex, 200, Json.write(b));
     }
 
