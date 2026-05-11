@@ -6,8 +6,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="$ROOT_DIR/.pmh"
-PID_FILE="$STATE_DIR/server.pid"
-LOG_FILE="$STATE_DIR/server.log"
+GRADLE_TASK="${PMH_GRADLE_TASK:-:potatomc:runServer}"
+RUN_DIR="${PMH_RUN_DIR:-run}"
+# Derive a slug from the gradle task for per-task pid/log files (so limited and normal don't clash).
+TASK_SLUG="$(echo "$GRADLE_TASK" | sed 's#[^A-Za-z0-9]#_#g')"
+PID_FILE="$STATE_DIR/server${TASK_SLUG:+_$TASK_SLUG}.pid"
+LOG_FILE="$STATE_DIR/server${TASK_SLUG:+_$TASK_SLUG}.log"
+# Keep a stable symlink-style copy for backward compat with the default task.
+if [[ "$GRADLE_TASK" == ":potatomc:runServer" ]]; then
+  PID_FILE="$STATE_DIR/server.pid"
+  LOG_FILE="$STATE_DIR/server.log"
+fi
 PORT="${PMH_PORT:-25585}"
 BASE_URL="http://127.0.0.1:$PORT"
 
@@ -27,12 +36,12 @@ cmd_start() {
     err "server already running (pid $(cat "$PID_FILE"))"
     return 0
   fi
-  mkdir -p "$ROOT_DIR/run"
-  echo "eula=true" > "$ROOT_DIR/run/eula.txt"
+  mkdir -p "$ROOT_DIR/$RUN_DIR"
+  echo "eula=true" > "$ROOT_DIR/$RUN_DIR/eula.txt"
 
-  err "starting Minecraft dev server (logs: $LOG_FILE)"
+  err "starting Minecraft dev server (task: $GRADLE_TASK, runDir: $RUN_DIR, logs: $LOG_FILE)"
   cd "$ROOT_DIR"
-  nohup ./gradlew :potatomc:runServer --no-daemon >"$LOG_FILE" 2>&1 &
+  nohup ./gradlew "$GRADLE_TASK" --no-daemon >"$LOG_FILE" 2>&1 &
   local gpid=$!
   disown "$gpid" 2>/dev/null || true
   echo "$gpid" > "$PID_FILE"

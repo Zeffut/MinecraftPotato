@@ -19,6 +19,7 @@ bin/
 
 # Fabric / Loom
 run/
+run-limited/
 .fabric/
 remappedSrc/
 
@@ -27,5 +28,4 @@ remappedSrc/
 Thumbs.db
 
 # PotatoHarness runtime state
-.pmh/server.pid
-.pmh/server.log
+.pmh/

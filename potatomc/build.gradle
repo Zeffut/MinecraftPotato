@@ -84,5 +84,17 @@ loom {
             runDir = '../run'
             vmArgs '-Dpotatomc.dev=true'
         }
+        serverLimited {
+            server()
+            ideConfigGenerated false
+            runDir = '../run-limited'
+            vmArgs(
+                '-XX:ActiveProcessorCount=1',
+                '-Xmx1G',
+                '-Xms1G',
+                '-XX:+UseSerialGC',
+                '-Dpotatomc.dev=true'
+            )
+        }
     }
 }

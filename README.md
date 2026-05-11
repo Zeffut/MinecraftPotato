@@ -20,6 +20,28 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
 - 🚧 Comparatif Starlight / Phosphor (à venir)
 
+### Constrained-environment bench — v0.2-wip (seed=42, 2026-05-11)
+
+> Cible réaliste : free hosting / Aternos / VPS bon marché. `runServerLimited` boote le serveur avec
+> `-XX:ActiveProcessorCount=1 -Xmx1G -Xms1G -XX:+UseSerialGC`. Le but est de mesurer le gain de notre
+> batching + threading + memory layout sur la cible réelle, pas sur un M-series 10 cœurs où vanilla
+> est déjà over-provisionné.
+
+Reproduire : `scripts/test-bench-limited.sh` (limited) puis `scripts/test-bench.sh` (unrestricted).
+
+| Workload                | Iters | Unrestricted (Potato / Vanilla / Speedup) | Limited 1c/1G (Potato / Vanilla / Speedup) |
+|-------------------------|-------|--------------------------------------------|---------------------------------------------|
+| `single_block_update`   | 100/200 | 3 086 / 106 788 / 0.029×                | 1 017 / 72 352 / 0.014×                     |
+| `bulk_random_updates`   | 100   | 1 846 / 253 644 / 0.007×                   | 1 150 / 195 694 / 0.006×                    |
+| `full_chunk_relight`    | 50/100 | 602 / 99 941 / 0.006×                     | 398 / 139 072 / 0.003×                      |
+| `bulk_writes_no_read`   | 100   | 621 / 7 144 / 0.087×                       | 640 / 4 001 / **0.160×**                    |
+
+> **Lecture honnête** : la contrainte 1-cœur/1 GB ralentit vanilla plus que nous sur `bulk_writes_no_read`
+> (notre meilleur workload : batching différé exposable), faisant remonter le speedup de 0.087× → 0.160× (×1.84).
+> Sur les autres workloads, la contrainte ne change pas le verdict — vanilla reste largement devant tant
+> que le flush-on-read force un BFS sync à chaque itération. Conclusion : la cible ≥5× n'est pas
+> atteinte ; le gap dominant reste algorithmique (flush-on-read, opacité partagée), pas du tuning JVM.
+
 ### Benchmark results — v0.2-wip (seed=42, post-incremental-sky-light)
 
 > **Update — sky-light incrémental Case C** : les shifts de heightmap _vers le bas_ (cassage du bloc topmost) sont désormais traités en O(Δh) — on écrit sky=15 sur la plage de cellules nouvellement révélées et on seed un seul BFS. Pas de rebuild complet de colonne. Les shifts _vers le haut_ (Case B) tombent toujours sur le recompute complet (besoin d'un darken-BFS qu'on n'a pas encore). Validate `diff_count: 0`, `sky_max_delta: 0`. `bulk_writes_no_read` remonte de **458 → 638 ops/s** (+39 %, recovery partielle vers la baseline pré-sky de ~996 ops/s).
@@ -148,6 +170,7 @@ Le repo est un **monorepo Gradle** produisant deux jars Fabric :
 scripts/test-pmh.sh          # smoke test harness
 scripts/test-engine.sh       # validation engine vs vanilla
 scripts/test-bench.sh        # microbench fumée
+scripts/test-bench-limited.sh  # microbench sous contrainte 1c/1G/SerialGC
 ```
 
 ## Specs & plans
