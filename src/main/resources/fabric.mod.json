@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "potatomc",
+  "version": "${version}",
+  "name": "PotatoMC",
+  "description": "Mod d'optimisation extrême pour Minecraft — pensé pour les configs ultra légères (patate-friendly).",
+  "authors": ["tom77ds"],
+  "contact": {
+    "sources": "https://github.com/tom77ds/potatomc"
+  },
+  "license": "MIT",
+  "icon": "assets/potatomc/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.potatomc.PotatoMC"],
+    "client": ["com.potatomc.client.PotatoMCClient"]
+  },
+  "mixins": [
+    "potatomc.mixins.json",
+    {
+      "config": "potatomc.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "accessWidener": "potatomc.accesswidener",
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "sodium": "*",
+    "lithium": "*"
+  }
+}

@@ -1,0 +1,5 @@
+accessWidener v2 named
+
+# Ajouter ici les accesseurs nécessaires pour patcher des champs/méthodes privés
+# Exemple :
+# accessible field net/minecraft/client/MinecraftClient fps I
