@@ -4,6 +4,7 @@ import com.potatomc.lighting.CompatGuard;
 import com.potatomc.lighting.PotatoLightEngine;
 import com.potatomc.lighting.bridge.EngineHolder;
 import net.minecraft.block.BlockState;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.chunk.WorldChunk;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,17 +26,17 @@ public abstract class WorldChunkMixin {
     private void potatomc$onSetBlockStatePos(
             BlockPos pos, BlockState state, int flags,
             CallbackInfoReturnable<BlockState> cir) {
-        notifyEngine(pos, state, cir.getReturnValue());
+        notifyEngine(((WorldChunk) (Object) this), pos, state, cir.getReturnValue());
     }
 
-private static void notifyEngine(BlockPos pos, BlockState newState, BlockState returned) {
+    private static void notifyEngine(WorldChunk self, BlockPos pos, BlockState newState, BlockState returned) {
         if (!CompatGuard.isActive()) return;
         PotatoLightEngine engine = EngineHolder.get();
         if (engine == null) return;
         BlockState observed = newState != null ? newState : returned;
         if (observed == null) return;
+        if (!(self.getWorld() instanceof ServerWorld serverWorld)) return;
         int emitted = observed.getLuminance();
-        boolean opaque = observed.isOpaqueFullCube();
-        engine.onBlockChanged(pos, emitted, opaque);
+        engine.onBlockChanged(serverWorld, pos, emitted);
     }
 }
