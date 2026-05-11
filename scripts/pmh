@@ -94,6 +94,19 @@ cmd_light() {
   curl -fsS "$BASE_URL/light/$x/$y/$z" | jq .
 }
 
+cmd_stats() {
+  curl -fsS "$BASE_URL/stats" | jq .
+}
+
+cmd_validate() {
+  local radius="${1:-2}"
+  local cx="${2:-0}" cy="${3:-100}" cz="${4:-0}"
+  local payload
+  payload=$(jq -nc --argjson r "$radius" --argjson x "$cx" --argjson y "$cy" --argjson z "$cz" \
+    '{center:[$x,$y,$z], radius:$r}')
+  curl -fsS -X POST -H 'Content-Type: application/json' -d "$payload" "$BASE_URL/validate" | jq .
+}
+
 cmd_logs() {
   [[ -f "$LOG_FILE" ]] || die "no log file yet"
   if [[ "${1:-}" == "-f" ]]; then tail -f "$LOG_FILE"; else tail -n 100 "$LOG_FILE"; fi
@@ -109,6 +122,8 @@ main() {
     cmd)    cmd_cmd    "$@" ;;
     place)  cmd_place  "$@" ;;
     light)  cmd_light  "$@" ;;
+    stats)  cmd_stats  "$@" ;;
+    validate) cmd_validate "$@" ;;
     logs)   cmd_logs   "$@" ;;
     ""|-h|--help|help)
       cat <<'EOF'
@@ -120,6 +135,8 @@ pmh — PotatoHarness CLI
   pmh cmd "<server command>"         Run a /command as server console
   pmh place <block> <x> <y> <z>      Shortcut for setblock
   pmh light <x> <y> <z>              Read light at position (vanilla + potato)
+  pmh stats                          Show engine + harness stats
+  pmh validate [radius] [x y z]      Run DifferentialValidator around a point
   pmh logs [-f]                      Tail the server log
 
 Env:

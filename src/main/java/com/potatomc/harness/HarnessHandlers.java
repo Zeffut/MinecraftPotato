@@ -20,6 +20,8 @@ public final class HarnessHandlers {
     public static void bindAll(BiConsumer<String, HttpHandler> bind) {
         bind.accept("/cmd", HarnessHandlers::handleCmd);
         bind.accept("/light/", HarnessHandlers::handleLight);
+        bind.accept("/stats", HarnessHandlers::handleStats);
+        bind.accept("/validate", HarnessHandlers::handleValidate);
         bind.accept("/shutdown", HarnessHandlers::handleShutdown);
     }
 
@@ -101,18 +103,91 @@ public final class HarnessHandlers {
                 MinecraftServer server = ServerHolder.get();
                 ServerWorld world = server.getOverworld();
                 BlockPos pos = new BlockPos(x, y, z);
-                var lp = world.getLightingProvider();
-                int vBlock = lp.get(LightType.BLOCK).getLightLevel(pos);
-                int vSky = lp.get(LightType.SKY).getLightLevel(pos);
+                int[] vanilla = new int[2];
+                com.potatomc.lighting.bridge.EngineHolder.runBypassed(() -> {
+                    vanilla[0] = world.getLightLevel(LightType.BLOCK, pos);
+                    vanilla[1] = world.getLightLevel(LightType.SKY, pos);
+                });
+                int pBlock = com.potatomc.PotatoMC.LIGHT_ENGINE.getLightLevel(
+                    pos, com.potatomc.lighting.api.LightLevelAPI.LightType.BLOCK);
+                int pSky = com.potatomc.PotatoMC.LIGHT_ENGINE.getLightLevel(
+                    pos, com.potatomc.lighting.api.LightLevelAPI.LightType.SKY);
+                int mBlock = world.getLightLevel(LightType.BLOCK, pos);
+                int mSky = world.getLightLevel(LightType.SKY, pos);
                 Map<String, Object> b = new LinkedHashMap<>();
                 b.put("pos", java.util.List.of(x, y, z));
-                b.put("vanilla_block", vBlock);
-                b.put("vanilla_sky", vSky);
-                b.put("potato_block", vBlock);
-                b.put("potato_sky", vSky);
-                b.put("match", true);
+                b.put("vanilla_block", vanilla[0]);
+                b.put("vanilla_sky", vanilla[1]);
+                b.put("potato_block", pBlock);
+                b.put("potato_sky", pSky);
+                b.put("mixed_block", mBlock);
+                b.put("mixed_sky", mSky);
+                b.put("match", mBlock == pBlock && mSky == pSky);
+                b.put("engine_active", com.potatomc.lighting.CompatGuard.isActive());
                 return b;
             }, 5000);
+            HarnessServer.respond(ex, 200, Json.write(body));
+        } catch (Exception e) {
+            HarnessServer.respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    private static void handleStats(HttpExchange ex) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"GET required\"}");
+            return;
+        }
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("engine_active", com.potatomc.lighting.CompatGuard.isActive());
+        b.put("sections_tracked", com.potatomc.PotatoMC.LIGHT_ENGINE.trackedSectionsCount());
+        b.put("server_ready", ServerHolder.isReady());
+        HarnessServer.respond(ex, 200, Json.write(b));
+    }
+
+    private static void handleValidate(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"POST required\"}");
+            return;
+        }
+        if (!ServerHolder.isReady()) {
+            HarnessServer.respond(ex, 503, "{\"error\":\"server not ready\"}");
+            return;
+        }
+        Map<String, Object> req = Json.parseObject(HarnessServer.readBody(ex));
+        Object centerObj = req.get("center");
+        Object radiusObj = req.get("radius");
+        if (!(centerObj instanceof java.util.List<?> centerList) || centerList.size() != 3) {
+            HarnessServer.respond(ex, 400, "{\"error\":\"center must be [x,y,z]\"}");
+            return;
+        }
+        if (!(radiusObj instanceof Number)) {
+            HarnessServer.respond(ex, 400, "{\"error\":\"radius must be int\"}");
+            return;
+        }
+        int radius = ((Number) radiusObj).intValue();
+        if (radius < 1 || radius > 16) {
+            HarnessServer.respond(ex, 400, "{\"error\":\"radius must be 1..16\"}");
+            return;
+        }
+        double cx = ((Number) centerList.get(0)).doubleValue();
+        double cy = ((Number) centerList.get(1)).doubleValue();
+        double cz = ((Number) centerList.get(2)).doubleValue();
+
+        try {
+            Map<String, Object> body = ServerHolder.submitAndWait(() -> {
+                ServerWorld world = ServerHolder.get().getOverworld();
+                com.potatomc.debug.DifferentialValidator.Report r =
+                    com.potatomc.debug.DifferentialValidator.runAround(
+                        world, new net.minecraft.util.math.Vec3d(cx, cy, cz), radius);
+                Map<String, Object> b = new LinkedHashMap<>();
+                b.put("center", java.util.List.of(cx, cy, cz));
+                b.put("radius", radius);
+                b.put("total_blocks", r.totalBlocks());
+                b.put("diff_count", r.diffCount());
+                b.put("max_delta", r.maxDelta());
+                b.put("pass", r.maxDelta() <= 1);
+                return b;
+            }, 60000);
             HarnessServer.respond(ex, 200, Json.write(body));
         } catch (Exception e) {
             HarnessServer.respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
