@@ -31,8 +31,10 @@ cmd_start() {
   echo "eula=true" > "$ROOT_DIR/run/eula.txt"
 
   err "starting Minecraft dev server (logs: $LOG_FILE)"
-  (cd "$ROOT_DIR" && nohup ./gradlew runServer --no-daemon >"$LOG_FILE" 2>&1 &)
+  cd "$ROOT_DIR"
+  nohup ./gradlew runServer --no-daemon >"$LOG_FILE" 2>&1 &
   local gpid=$!
+  disown "$gpid" 2>/dev/null || true
   echo "$gpid" > "$PID_FILE"
 
   err "waiting for /health on $BASE_URL (up to 300s) ..."
