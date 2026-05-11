@@ -20,6 +20,22 @@ public final class HarnessHandlers {
     public static void bindAll(BiConsumer<String, HttpHandler> bind) {
         bind.accept("/cmd", HarnessHandlers::handleCmd);
         bind.accept("/light/", HarnessHandlers::handleLight);
+        bind.accept("/shutdown", HarnessHandlers::handleShutdown);
+    }
+
+    private static void handleShutdown(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"POST required\"}");
+            return;
+        }
+        if (!ServerHolder.isReady()) {
+            HarnessServer.respond(ex, 503, "{\"error\":\"server not ready\"}");
+            return;
+        }
+        HarnessServer.respond(ex, 200, "{\"shutdown\":true}");
+        // Stop AFTER replying — schedule on server thread.
+        var server = ServerHolder.get();
+        server.execute(() -> server.stop(false));
     }
 
     private static void handleCmd(HttpExchange ex) throws IOException {
