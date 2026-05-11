@@ -16,6 +16,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class PotatoLightEngine implements LightLevelAPI {
 
+    public static final class FlushStats {
+        public final java.util.concurrent.atomic.LongAdder blockSeedNs = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder blockPropagateNs = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder removalPhaseNs = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder skyIncrementalNs = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder skyFullColumnNs = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder flushCount = new java.util.concurrent.atomic.LongAdder();
+        public final java.util.concurrent.atomic.LongAdder pendingDrainedTotal = new java.util.concurrent.atomic.LongAdder();
+    }
+
+    public final FlushStats flushStats = new FlushStats();
+
+    public java.util.Map<String, Long> getFlushStatsSnapshot() {
+        java.util.LinkedHashMap<String, Long> m = new java.util.LinkedHashMap<>();
+        m.put("blockSeedNs", flushStats.blockSeedNs.sum());
+        m.put("blockPropagateNs", flushStats.blockPropagateNs.sum());
+        m.put("removalPhaseNs", flushStats.removalPhaseNs.sum());
+        m.put("skyIncrementalNs", flushStats.skyIncrementalNs.sum());
+        m.put("skyFullColumnNs", flushStats.skyFullColumnNs.sum());
+        m.put("flushCount", flushStats.flushCount.sum());
+        m.put("pendingDrainedTotal", flushStats.pendingDrainedTotal.sum());
+        return m;
+    }
+
     public record SectionKey(int sx, int sy, int sz) {}
 
     public static final class SectionLightData {
@@ -306,15 +330,20 @@ public final class PotatoLightEngine implements LightLevelAPI {
             WorldBFSWorker w = worldWorkers.get();
             WorldBFSWorker.SectionAccess access = blockLightAccess(world);
 
+            long tSeed0 = System.nanoTime();
             java.util.List<PendingChange> removals = new java.util.ArrayList<>();
             PendingChange p;
+            int drained = 0;
             while ((p = pending.poll()) != null) {
+                drained++;
                 if (p.emittedLight() > 0) {
                     w.seed(access, p.x(), p.y(), p.z(), p.emittedLight());
                 } else {
                     removals.add(p);
                 }
             }
+            flushStats.pendingDrainedTotal.add(drained);
+            flushStats.blockSeedNs.add(System.nanoTime() - tSeed0);
 
             // Removal handling — v0.2 simple-correct strategy:
             // For each removed emitter, clear its stored cell, then sample
@@ -328,6 +357,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
             // this is acceptable for v0.2 (block_max_delta ≤ 1 in normal
             // cases). v0.3 will switch to propagation-aware darkening
             // (Sodium/Starlight technique).
+            long tRem0 = System.nanoTime();
             if (!removals.isEmpty()) {
                 BlockPos.Mutable bp = new BlockPos.Mutable();
                 int[] vanillaLevel = new int[1];
@@ -343,9 +373,12 @@ public final class PotatoLightEngine implements LightLevelAPI {
                     seedFromVanilla(world, access, w, bp, vanillaLevel, r.x(), r.y(), r.z() + 1);
                 }
             }
+            flushStats.removalPhaseNs.add(System.nanoTime() - tRem0);
 
             // Single combined BFS over all seeds
+            long tProp0 = System.nanoTime();
             w.propagate(access);
+            flushStats.blockPropagateNs.add(System.nanoTime() - tProp0);
 
             // Sky-light: drain pending columns (deduped within this flush) and
             // process them in parallel on the engine's ForkJoinPool.
@@ -363,6 +396,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
             //     correctness-preserving.
             //   - world.getBlockState() reads are read-only on already-loaded
             //     chunks; mirroring Starlight's parallel-flush approach.
+            long tSkyCol0 = System.nanoTime();
             if (!pendingSkyColumns.isEmpty()) {
                 java.util.HashSet<Long> dedup = new java.util.HashSet<>();
                 java.util.ArrayList<Long> columns = new java.util.ArrayList<>();
@@ -446,6 +480,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
                     }).join();
                 }
             }
+            flushStats.skyFullColumnNs.add(System.nanoTime() - tSkyCol0);
 
             // ----------------------------------------------------------------
             // Drain incremental sky updates: heightmap shifts where the column
@@ -458,12 +493,15 @@ public final class PotatoLightEngine implements LightLevelAPI {
             //   3) No risk of the cross-thread chunk-load deadlock the bulk
             //      column path had to defend against.
             // ----------------------------------------------------------------
+            long tSkyInc0 = System.nanoTime();
             if (!pendingSkyIncrementals.isEmpty()) {
                 IncrementalSkyUpdate inc;
                 while ((inc = pendingSkyIncrementals.poll()) != null) {
                     recomputeSkyForColumnIncremental(world, inc.x(), inc.z(), inc.oldTopY(), inc.newTopY());
                 }
             }
+            flushStats.skyIncrementalNs.add(System.nanoTime() - tSkyInc0);
+            flushStats.flushCount.increment();
         } finally {
             flushing.set(false);
         }

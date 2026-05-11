@@ -7,6 +7,9 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Reflection-based optional bridge to PotatoMC. PotatoMeasure does not import
@@ -113,6 +116,28 @@ public final class PotatoMCBridge {
      * Returns null if PotatoMC is not present or call failed.
      * Array layout: [totalBlocks, diffCount, maxDelta, blockDiffs, blockMaxDelta, skyDiffs, skyMaxDelta]
      */
+    /**
+     * Reflectively reads {@code PotatoLightEngine.flushStats} LongAdder fields
+     * and returns a snapshot map. Empty map if PotatoMC isn't loaded or
+     * reflection fails (shape stable so callers can rely on key presence).
+     */
+    public static Map<String, Long> flushStatsSnapshot() {
+        if (!isPresent()) return Collections.emptyMap();
+        try {
+            Object stats = engineInstance.getClass().getField("flushStats").get(engineInstance);
+            Class<?> sc = stats.getClass();
+            Map<String, Long> out = new LinkedHashMap<>();
+            for (String f : new String[]{
+                "blockSeedNs", "blockPropagateNs", "removalPhaseNs",
+                "skyIncrementalNs", "skyFullColumnNs", "flushCount", "pendingDrainedTotal"
+            }) {
+                Object adder = sc.getField(f).get(stats);
+                out.put(f, (long) adder.getClass().getMethod("sum").invoke(adder));
+            }
+            return out;
+        } catch (Throwable t) { return Collections.emptyMap(); }
+    }
+
     public static int[] validate(Object serverWorld, Object center, int radius) {
         if (!isPresent()) return null;
         try {

@@ -42,6 +42,38 @@ Reproduire : `scripts/test-bench-limited.sh` (limited) puis `scripts/test-bench.
 > que le flush-on-read force un BFS sync à chaque itération. Conclusion : la cible ≥5× n'est pas
 > atteinte ; le gap dominant reste algorithmique (flush-on-read, opacité partagée), pas du tuning JVM.
 
+### Benchmark results — v0.2-wip (seed=42, post-chunk-load-cold + flush profiling)
+
+Nouveau workload `chunk_load_cold` : place un glowstone dans une **section jamais touchée par notre moteur** (sweep Y∈[64..303] sur les 4 chunks forceload), lit la light, retire le bloc. C'est le chemin _lazy section init_ (`importVanillaSection` = 4096 reads vanilla + écritures packed-storage) plus le BFS block-light et la maj heightmap+sky. Vise à exposer le scénario Starlight (« cold chunk lighting » à l'activation d'un chunk).
+
+| Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
+|-------------------------|-------|--------------|---------------|---------|
+| `single_block_update`   | 200   | 2 244        | 121 722       | 0.018×  |
+| `bulk_random_updates`   | 100   | 922          | 260 813       | 0.004×  |
+| `bulk_writes_no_read`   | 100   | 349          | 3 424         | 0.102×  |
+| `chunk_load_cold`       | 30    | **879**      | **37 172**    | **0.024×** |
+
+> **Verdict honnête sur `chunk_load_cold`** : la cible Starlight n'est **pas atteinte**. Notre `importVanillaSection` paye 4096 reads vanilla par section non-importée, ce qui dépasse le coût d'un BFS vanilla simple. Le _cold-chunk_ tel que mesuré ici se fait par première lecture d'une section, pas par activation d'un chunk entier — la mesure capture bien le bottleneck (lazy import + flush) mais pas dans une forme où notre engine peut amortir le coût.
+
+#### Profil per-phase `flushPending()` (cumulé sur tous les workloads ci-dessus)
+
+```json
+{
+  "blockSeedNs":        4 287 205,    //  1.5 %
+  "blockPropagateNs": 198 704 594,    // 68.7 %  ← bottleneck dominant
+  "removalPhaseNs":     4 507 971,    //  1.6 %
+  "skyIncrementalNs":  38 530 042,    // 13.3 %
+  "skyFullColumnNs":   45 647 080,    // 15.8 %
+  "flushCount":               254,
+  "pendingDrainedTotal":   11 066
+}
+```
+
+**Le BFS de propagation block-light domine à ~69 %** du temps de flush, suivi par les recomputes de colonnes sky (~16 %) et le drain incrémental sky (~13 %). Les phases de seed et de removal sont dans le bruit. Le prochain candidat d'optim est donc :
+1. **Réduire les `world.getBlockState` dans `WorldBFSWorker.propagate`** (visible dans le crash-stack — chaque vérif d'opacité touche le monde vanilla via `OpacityCache`),
+2. **Skip BFS quand le seed ne peut pas dominer la valeur déjà présente** (early-out déjà partiellement en place mais peut être resserré),
+3. **Pré-charger l'opacité par section** au lieu de lookups individuels (locality + élimine la map ConcurrentHashMap chaude).
+
 ### Benchmark results — v0.2-wip (seed=42, post-incremental-sky-light)
 
 > **Update — sky-light incrémental Case C** : les shifts de heightmap _vers le bas_ (cassage du bloc topmost) sont désormais traités en O(Δh) — on écrit sky=15 sur la plage de cellules nouvellement révélées et on seed un seul BFS. Pas de rebuild complet de colonne. Les shifts _vers le haut_ (Case B) tombent toujours sur le recompute complet (besoin d'un darken-BFS qu'on n'a pas encore). Validate `diff_count: 0`, `sky_max_delta: 0`. `bulk_writes_no_read` remonte de **458 → 638 ops/s** (+39 %, recovery partielle vers la baseline pré-sky de ~996 ops/s).

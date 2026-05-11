@@ -114,7 +114,7 @@ public final class HarnessHandlers {
                 ServerCommandSource src = server.getCommandSource();
                 server.getCommandManager().parseAndExecute(src, s);
                 return 0;
-            }, 5000);
+            }, 60_000);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("success", true);
             body.put("command", s);
@@ -193,6 +193,7 @@ public final class HarnessHandlers {
         b.put("sections_tracked", com.potatomeasure.PotatoMCBridge.trackedSections());
         b.put("server_ready", ServerHolder.isReady());
         b.put("potatomc_present", com.potatomeasure.PotatoMCBridge.isPresent());
+        b.put("flush_stats", com.potatomeasure.PotatoMCBridge.flushStatsSnapshot());
         HarnessServer.respond(ex, 200, Json.write(b));
     }
 

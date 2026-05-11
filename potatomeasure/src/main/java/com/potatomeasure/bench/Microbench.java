@@ -13,7 +13,7 @@ import java.util.Random;
 
 public final class Microbench {
 
-    public enum Workload { SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT, BULK_WRITES_NO_READ }
+    public enum Workload { SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT, BULK_WRITES_NO_READ, CHUNK_LOAD_COLD }
     public enum Engine { POTATO, VANILLA }
 
     public record Result(
@@ -61,6 +61,7 @@ public final class Microbench {
                 case BULK_RANDOM_UPDATES -> bulkRandomUpdates(world, rng);
                 case FULL_CHUNK_RELIGHT -> fullChunkRelight(world, rng);
                 case BULK_WRITES_NO_READ -> bulkWritesNoRead(world, rng);
+                case CHUNK_LOAD_COLD -> chunkLoadCold(world, rng);
             }
         };
         if (engine == Engine.VANILLA) PotatoMCBridge.runBypassed(task);
@@ -113,6 +114,61 @@ public final class Microbench {
      * during chunk gen / explosion / piston cascade — the case where deferred
      * batching should shine. No intermediate reads to force sync flushes.
      */
+    private static int chunkLoadCounter = 0;
+
+    /**
+     * Cold chunk-lighting workload. Each iteration force-loads a NEW chunk
+     * (one never previously lit by either engine), then forces lighting
+     * settlement via a sample read. This measures the Starlight-style win:
+     * lighting computation when chunks first become active.
+     *
+     * Chunks are picked deterministically but far from spawn (cx/cz ≥ 100,
+     * stride 4 chunks) so warmup + main pass + both engines see distinct
+     * chunks. Counter is process-global so re-runs also pick fresh chunks
+     * until the 100×100 grid (~40k chunks) is exhausted.
+     */
+    private static void chunkLoadCold(ServerWorld world, Random rng) {
+        int counter = chunkLoadCounter++;
+        // Sweep a fresh 16³ section per iteration inside the 4 always-loaded
+        // chunks at spawn (forceload -2..2 only really loads chunks (-1,-1)
+        // to (0,0) — vanilla `forceload` takes BLOCK coords, so -2..2 = 4
+        // chunks). We sweep Y sections [4..18] (Y=64..303) across those 4
+        // chunks giving 60 unique never-before-imported sections — enough
+        // for warmup(3) + main(30) × 2 engines = 66.
+        //
+        // What this measures (the Starlight-style cold-chunk win):
+        //   - importVanillaSection: 4096 vanilla light queries + packed
+        //     storage writes on the first read into an unseen section.
+        //   - lazy column init (recomputeSkyForColumn) for the column at
+        //     placement coords on the first sky read.
+        //   - block-light seed + BFS for the placed glowstone.
+        //   - sky-light heightmap shift seed + sky BFS (placement raises top).
+        // Vanilla pays the equivalent work via its own light providers.
+        int sx = ((counter / 15) % 2) - 1;            // -1 or 0
+        int sz = (((counter / 15) / 2) % 2) - 1;       // -1 or 0
+        int sy = 4 + (counter % 15);                   // 4..18
+        int blockX = (sx << 4) + 8;
+        int blockY = (sy << 4) + 8;
+        int blockZ = (sz << 4) + 8;
+
+        BlockPos pos = new BlockPos(blockX, blockY, blockZ);
+        // Place a glowstone — triggers light source seeding in both engines.
+        world.setBlockState(pos, Blocks.GLOWSTONE.getDefaultState(), 2);
+
+        // Read at the section centre + a far corner to force light resolution
+        // across the section. For our engine, the first read into an
+        // un-imported section also pays the importVanillaSection cost (4096
+        // vanilla queries) — that's the headline "cold chunk lighting" cost
+        // we want to measure.
+        world.getLightLevel(LightType.BLOCK, pos);
+        world.getLightLevel(LightType.SKY, pos);
+        world.getLightLevel(LightType.BLOCK, pos.east(7));
+
+        // Restore air so subsequent unrelated reads don't pollute follow-up
+        // benches. Position is unique to this iter so no aliasing.
+        world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+    }
+
     private static void bulkWritesNoRead(ServerWorld world, Random rng) {
         java.util.List<BlockPos> placed = new java.util.ArrayList<>(50);
         for (int i = 0; i < 50; i++) {

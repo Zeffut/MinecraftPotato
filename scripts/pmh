@@ -157,7 +157,7 @@ pmh — PotatoHarness CLI
   pmh light <x> <y> <z>              Read light at position (vanilla + potato)
   pmh stats                          Show engine + harness stats
   pmh validate [radius] [x y z]      Run DifferentialValidator around a point
-  pmh bench <workload> [iters] [seed] Run microbench (single_block_update|bulk_random_updates|full_chunk_relight)
+  pmh bench <workload> [iters] [seed] Run microbench (single_block_update|bulk_random_updates|full_chunk_relight|bulk_writes_no_read|chunk_load_cold)
   pmh logs [-f]                      Tail the server log
 
 Env:
