@@ -74,12 +74,14 @@ loom {
                 "-XX:+UnlockExperimentalVMOptions",
                 "-XX:+UseG1GC",
                 "-XX:+UseStringDeduplication",
-                "-Dfabric.debug.disableClassPathIsolation=true"
+                "-Dfabric.debug.disableClassPathIsolation=true",
+                "-Dpotatomc.dev=true"
             )
         }
         server {
             server()
             ideConfigGenerated true
+            vmArgs '-Dpotatomc.dev=true'
         }
     }
 }
