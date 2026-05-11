@@ -20,18 +20,12 @@ public final class PotatoMC implements ModInitializer {
         CompatGuard.evaluate();
         if (CompatGuard.isActive()) {
             com.potatomc.lighting.bridge.EngineHolder.set(LIGHT_ENGINE);
-            // Pre-populate sky-light per column when a chunk loads on the server,
-            // so reads succeed even without a preceding block change.
-            net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
-                net.minecraft.util.math.ChunkPos cp = chunk.getPos();
-                int startX = cp.getStartX();
-                int startZ = cp.getStartZ();
-                for (int dx = 0; dx < 16; dx++) {
-                    for (int dz = 0; dz < 16; dz++) {
-                        LIGHT_ENGINE.recomputeSkyForColumn(world, startX + dx, startZ + dz);
-                    }
-                }
-            });
+            // NOTE: aggressive CHUNK_LOAD pre-population disabled — caused server boot to hang
+            // on spawn-area generation (~256 columns × 25 chunks × full-height BFS each).
+            // Sky-light is now lazy: populated on the first block change in each column.
+            // Cells never touched by setBlockState return potato_sky=0 (vanilla differs).
+            // Proper fix: incremental sky-light updates only on opacity change in a column.
+            // Tracked for v0.2.
         }
         net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT.register(
             (dispatcher, registryAccess, env) ->

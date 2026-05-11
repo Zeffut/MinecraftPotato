@@ -116,10 +116,12 @@ public final class PotatoLightEngine implements LightLevelAPI {
         WorldBFSWorker.SectionAccess access = blockLightAccess(world);
         w.seed(access, pos.getX(), pos.getY(), pos.getZ(), emittedLight);
         w.propagate(access);
-        // Sky light: rebuild the affected column.
-        // NOTE v0.2: this is a full-column rebuild on every block change;
-        // vanilla does incremental updates. Acceptable for v0.1 correctness.
-        recomputeSkyForColumn(world, pos.getX(), pos.getZ());
+        // NOTE: sky-light recompute disabled in onBlockChanged for v0.1.
+        // Full-column rebuild × thousands of setBlockState during world gen → boot hang.
+        // `recomputeSkyForColumn(world, pos.getX(), pos.getZ())` is intentionally NOT called here.
+        // The method exists and is correct; callers should invoke it explicitly on demand
+        // (e.g. via a /potatomc sky <x> <z> command). v0.2: incremental sky updates only
+        // when the column's heightmap actually changed.
     }
 
     /**
