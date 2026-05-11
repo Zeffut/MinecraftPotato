@@ -6,6 +6,7 @@ import com.potatomc.lighting.storage.MortonIndex;
 import com.potatomc.lighting.storage.PackedLightStorage;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.Heightmap;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,11 +75,103 @@ public final class PotatoLightEngine implements LightLevelAPI {
         };
     }
 
+    /**
+     * Mirror of {@link #blockLightAccess(ServerWorld)} but read/writes the
+     * SKY storage. Opacity source is identical (live world). Used for the
+     * sky-light column rebuild + horizontal BFS.
+     */
+    public WorldBFSWorker.SectionAccess skyLightAccess(ServerWorld world) {
+        return new WorldBFSWorker.SectionAccess() {
+            private final BlockPos.Mutable scratch = new BlockPos.Mutable();
+
+            @Override
+            public boolean isOpaque(int x, int y, int z) {
+                scratch.set(x, y, z);
+                return world.getBlockState(scratch).isOpaqueFullCube();
+            }
+
+            @Override
+            public int getLight(int x, int y, int z) {
+                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+                SectionLightData d = sections.get(k);
+                if (d == null) return 0;
+                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+                return d.sky.get(idx);
+            }
+
+            @Override
+            public void setLight(int x, int y, int z, int level) {
+                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+                SectionLightData d = getOrCreate(k);
+                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+                d.sky.set(idx, level);
+                dirty.add(k);
+            }
+        };
+    }
+
     public void onBlockChanged(ServerWorld world, BlockPos pos, int emittedLight) {
+        // Block light: seed at the modified position and BFS-propagate.
         WorldBFSWorker w = worldWorkers.get();
         WorldBFSWorker.SectionAccess access = blockLightAccess(world);
         w.seed(access, pos.getX(), pos.getY(), pos.getZ(), emittedLight);
         w.propagate(access);
+        // Sky light: rebuild the affected column.
+        // NOTE v0.2: this is a full-column rebuild on every block change;
+        // vanilla does incremental updates. Acceptable for v0.1 correctness.
+        recomputeSkyForColumn(world, pos.getX(), pos.getZ());
+    }
+
+    /**
+     * Rebuilds sky light for the column at world (x, z):
+     * <ol>
+     *   <li>Clears existing sky values in the column over the world height range.</li>
+     *   <li>Determines the top opaque Y using {@link Heightmap.Type#MOTION_BLOCKING}.</li>
+     *   <li>Seeds sky=15 in every non-opaque cell from {@code topY} up to world top.</li>
+     *   <li>Runs BFS propagation so the sky-15 cells spread horizontally with attenuation.</li>
+     * </ol>
+     *
+     * v0.1 simplification: uses MOTION_BLOCKING — leaves and water are treated as
+     * sky-blocking here, which slightly diverges from vanilla (vanilla attenuates
+     * through water rather than hard-blocking). Documented as a known v0.2 gap.
+     */
+    public void recomputeSkyForColumn(ServerWorld world, int x, int z) {
+        int worldTop = world.getTopYInclusive() + 1; // exclusive upper bound
+        int worldBottom = world.getBottomY();
+
+        // Query topY (vanilla heightmap): first y at-or-above which the column is open sky.
+        int topY = world.getTopY(Heightmap.Type.MOTION_BLOCKING, x, z);
+
+        // Step 1: clear sky storage in the column over the world height range.
+        for (int y = worldBottom; y < worldTop; y++) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = sections.get(k);
+            if (d == null) continue;
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.sky.set(idx, 0);
+        }
+
+        // Step 2: directly write sky=15 to every cell at-or-above topY. Open-sky
+        // cells are all 15 in vanilla — no attenuation between them — so writing
+        // them directly is both correct and far cheaper than seeding-then-BFS.
+        for (int y = topY; y < worldTop; y++) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.sky.set(idx, 15);
+            dirty.add(k);
+        }
+
+        // Step 3: seed BFS at the bottom open-sky cell so attenuation reaches
+        // sideways into any shadowed neighbour column. Only one seed per column
+        // is needed — neighbours seeded by their own column-rebuild loop pick up
+        // the work; horizontal interactions converge naturally.
+        if (topY < worldTop) {
+            WorldBFSWorker w = worldWorkers.get();
+            WorldBFSWorker.SectionAccess access = skyLightAccess(world);
+            w.seed(access, x, topY, z, 15);
+            w.propagate(access);
+        }
     }
 
     public void tick() {

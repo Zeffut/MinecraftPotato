@@ -26,10 +26,18 @@ echo "$LIGHT" | jq -c .
 echo "$LIGHT" | jq -e '.potato_block >= 14' >/dev/null
 echo "$LIGHT" | jq -e '.vanilla_block >= 14' >/dev/null
 
-echo "[engine-test] validate radius=1 around glowstone"
+echo "[engine-test] sky light at open-sky position"
+SKY=$("$PMH" light 0 200 0)
+echo "$SKY" | jq -c .
+echo "$SKY" | jq -e '.vanilla_sky == 15' >/dev/null
+echo "$SKY" | jq -e '.potato_sky == .vanilla_sky' >/dev/null
+
+echo "[engine-test] validate radius=1 around glowstone (block+sky)"
 VAL=$("$PMH" validate 1 0 100 0)
 echo "$VAL" | jq -c .
 echo "$VAL" | jq -e '.max_delta <= 1' >/dev/null
+echo "$VAL" | jq -e '.block_max_delta <= 1' >/dev/null
+echo "$VAL" | jq -e '.sky_max_delta <= 1' >/dev/null
 echo "$VAL" | jq -e '.pass == true' >/dev/null
 
 echo "[engine-test] stats after"

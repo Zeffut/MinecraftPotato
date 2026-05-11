@@ -185,6 +185,10 @@ public final class HarnessHandlers {
                 b.put("total_blocks", r.totalBlocks());
                 b.put("diff_count", r.diffCount());
                 b.put("max_delta", r.maxDelta());
+                b.put("block_diffs", r.blockDiffs());
+                b.put("block_max_delta", r.blockMaxDelta());
+                b.put("sky_diffs", r.skyDiffs());
+                b.put("sky_max_delta", r.skyMaxDelta());
                 b.put("pass", r.maxDelta() <= 1);
                 return b;
             }, 60000);

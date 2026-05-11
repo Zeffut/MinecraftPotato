@@ -84,6 +84,36 @@ class WorldBFSWorkerTest {
     }
 
     @Test
+    void multipleSkySeedsAttenuateUnderOverhang() {
+        // Simulate an open sky column at x in [0..20], plus an opaque overhang at y=10
+        // that blocks the column x in [5..7]. Seeds at all open-sky cells y>=10.
+        // Cells beneath the overhang should get sky light from horizontal BFS,
+        // attenuating by Manhattan distance to the nearest open-sky cell.
+        MapAccess a = new MapAccess();
+        for (int x = 5; x <= 7; x++) a.makeOpaque(x, 10, 0);
+
+        WorldBFSWorker w = new WorldBFSWorker();
+        // Seed sky=15 at every open-sky cell at y=10 across x∈[0..20].
+        for (int x = 0; x <= 20; x++) {
+            if (a.isOpaque(x, 10, 0)) continue;
+            w.seed(a, x, 10, 0, 15);
+        }
+        w.propagate(a);
+
+        // Directly under the overhang: (6, 9, 0) — distance to nearest open-sky cell
+        // (4,10,0) or (8,10,0) is Manhattan 3 → sky=12.
+        assertEquals(15, a.getLight(0, 10, 0));
+        assertEquals(15, a.getLight(4, 10, 0));
+        assertEquals(15, a.getLight(8, 10, 0));
+        // (5,9,0): nearest open-sky is (4,10,0), distance 2 → 13.
+        assertEquals(13, a.getLight(5, 9, 0));
+        // (6,9,0): distance to (4,10,0)=3 or (8,10,0)=3 → 12.
+        assertEquals(12, a.getLight(6, 9, 0));
+        // (7,9,0): distance to (8,10,0)=2 → 13.
+        assertEquals(13, a.getLight(7, 9, 0));
+    }
+
+    @Test
     void packUnpackRoundtripPositive() {
         long p = WorldBFSWorker.pack(123, 64, -57, 12);
         assertEquals(123, WorldBFSWorker.unpackX(p));
