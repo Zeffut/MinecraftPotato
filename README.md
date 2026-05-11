@@ -20,19 +20,26 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
 - 🚧 Comparatif Starlight / Phosphor (à venir)
 
-### Benchmark results — v0.1 baseline (premières mesures, seed=42)
+### Benchmark results — v0.1 (seed=42, post-batching)
 
-> ⚠️ **Disclaimer** : ces chiffres ont été pris pendant qu'une autre tâche de dev tournait en parallèle sur la même machine. Les valeurs absolues sont à prendre avec précaution — seul le **ratio Potato/Vanilla mesuré dans le même run** est fiable (les deux moteurs subissaient la même charge système). Une vraie campagne de bench reproductible sur machine idle est planifiée pour v0.2.
+> ⚠️ **Disclaimer** : chiffres pris pendant qu'une autre tâche de dev tournait en parallèle sur la même machine. Seul le **ratio Potato/Vanilla mesuré dans le même run** est interprétable. Campagne reproductible sur machine idle planifiée.
 
-Mesures via `scripts/pmh bench <workload>` sur le même serveur headless, en routant la même charge soit dans notre moteur soit dans vanilla via `EngineHolder.runBypassed`. Latences en nanosecondes.
+Mesures via `scripts/pmh bench <workload>` (deux runs dos-à-dos, notre moteur puis vanilla via `EngineHolder.runBypassed`).
 
-| Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup | Potato p50 / p95 / p99 |
-|-----------------------|-------|--------------|---------------|---------|------------------------|
-| `single_block_update` | 200   | 16 893       | 74 902        | 0.23×   | 32k / 202k / 357k ns   |
-| `bulk_random_updates` | 100   | 3 324        | 139 738       | 0.02×   | 249k / 931k / 1 222k ns|
-| `full_chunk_relight`  | 50    | 550          | 85 812        | 0.006×  | 777k / 8 084k / 18 724k ns |
+| Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup |
+|-----------------------|-------|--------------|---------------|---------|
+| `single_block_update` | 200   | 14 839       | 42 293        | 0.35×   |
+| `bulk_random_updates` | 100   | 4 686        | 118 354       | 0.04×   |
+| `full_chunk_relight`  | 50    | 645          | 85 561        | 0.008×  |
 
-**Lecture** : sur ces 3 workloads synthétiques, notre moteur est actuellement plus lent que vanilla (vanilla bénéficie de DEFERRED batching + années d'optims). C'est la baseline avant d'attaquer les chemins chauds : pooling de queues cross-section, batching différé du BFS, élimination des reads de validation, threading des chunks distants. Le harness est en place pour mesurer chaque pas.
+**Lecture honnête** : on est encore loin derrière vanilla. Le batching différé est en place côté écriture (`onBlockChanged` queue les changements, le BFS est flushé sur tick ou avant un read), mais le bench lit la lumière après *chaque* placement, ce qui force un flush sync à chaque itération et annule le bénéfice du batching. Les vrais gains viendront quand on :
+
+1. **Élimine le flush-on-read** — accepter de retourner une valeur légèrement stale entre ticks
+2. **Recopie incrémentale du sky-light** — actuellement désactivé du chemin chaud (cf. plus bas)
+3. **Threade les chunks distants** sur `ForkJoinPool`
+4. **Élimine les allocations du chemin chaud** (`WorldBFSWorker.SectionAccess` anonyme)
+
+Si on est encore loin de vanilla une fois ces 4 fixes faits, on regardera ce que fait Starlight et on bench frontalement.
 
 Reproduire :
 
