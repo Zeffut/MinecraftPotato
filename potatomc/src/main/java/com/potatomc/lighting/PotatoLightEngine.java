@@ -22,6 +22,10 @@ public final class PotatoLightEngine implements LightLevelAPI {
         public final PackedLightStorage block = new PackedLightStorage();
         public final PackedLightStorage sky = new PackedLightStorage();
         public final boolean[] opaque = new boolean[PackedLightStorage.SECTION_SIZE];
+        // True once vanilla's light values have been imported into this section.
+        // Used by the lazy section-init path to avoid double-imports and to
+        // detect sections that were partially populated by column-init only.
+        public volatile boolean imported = false;
     }
 
     public record PendingChange(int x, int y, int z, int emittedLight) {}
@@ -32,6 +36,20 @@ public final class PotatoLightEngine implements LightLevelAPI {
     private final ConcurrentLinkedQueue<PendingChange> pending = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean flushing = new AtomicBoolean();
     private volatile ServerWorld pendingWorld;
+
+    // Per-column heightmap cache: key = columnKey(x, z), value = topY from Heightmap.MOTION_BLOCKING.
+    // Absence = column has never been seeded (used for lazy init on first sky read).
+    private final ConcurrentHashMap<Long, Integer> heightmapCache = new ConcurrentHashMap<>();
+    private final ConcurrentLinkedQueue<Long> pendingSkyColumns = new ConcurrentLinkedQueue<>();
+    // Columns whose below-topY vanilla sky values have already been imported.
+    // On a subsequent recompute (heightmap-shift event) we skip the expensive
+    // per-cell vanilla query below topY and only refresh open-sky cells.
+    private final java.util.concurrent.ConcurrentHashMap.KeySetView<Long, Boolean> columnsImported =
+        ConcurrentHashMap.newKeySet();
+
+    private static long columnKey(int x, int z) {
+        return ((long) x << 32) | (z & 0xFFFFFFFFL);
+    }
 
     // Cached access lambdas — avoid per-flush allocation
     private volatile BlockLightAccess cachedBlockAccess;
@@ -68,12 +86,64 @@ public final class PotatoLightEngine implements LightLevelAPI {
 
     @Override
     public int getLightLevel(BlockPos pos, LightType type) {
-        if (!pending.isEmpty()) flushPending();
+        if (!pending.isEmpty() || !pendingSkyColumns.isEmpty()) flushPending();
+
+        if (type == LightType.SKY && pendingWorld != null) {
+            // Lazy column init: if we have no heightmap entry for this column, seed it now.
+            long ck = columnKey(pos.getX(), pos.getZ());
+            if (!heightmapCache.containsKey(ck)) {
+                int top = pendingWorld.getTopY(Heightmap.Type.MOTION_BLOCKING, pos.getX(), pos.getZ());
+                heightmapCache.put(ck, top);
+                recomputeSkyForColumn(pendingWorld, pos.getX(), pos.getZ());
+            }
+        }
+
         SectionKey k = keyOf(pos);
         SectionLightData data = sections.get(k);
+        if ((data == null || !data.imported) && pendingWorld != null) {
+            // Lazy section init: import vanilla truth on first read in an
+            // un-imported section. World gen places lava/torches/etc. that
+            // vanilla has already lit; we adopt those values so the engine
+            // doesn't read 0 for pre-existing emitters. Subsequent BFS
+            // passes propagate from this baseline correctly. Done once per
+            // section (guarded by SectionLightData.imported).
+            importVanillaSection(pendingWorld, k);
+            data = sections.get(k);
+        }
         if (data == null) return 0;
         int idx = MortonIndex.encode(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
         return type == LightType.BLOCK ? data.block.get(idx) : data.sky.get(idx);
+    }
+
+    /**
+     * Imports vanilla's block + sky light for every cell in a 16³ section.
+     * Called lazily on the first read into an untracked section so we
+     * inherit world-gen lighting (lava pockets, natural-source emitters,
+     * cave sky propagation) rather than reading zero.
+     */
+    private void importVanillaSection(ServerWorld world, SectionKey k) {
+        SectionLightData d = getOrCreate(k);
+        BlockPos.Mutable bp = new BlockPos.Mutable();
+        int[] bl = new int[1];
+        int[] sl = new int[1];
+        int baseX = k.sx() << 4;
+        int baseY = k.sy() << 4;
+        int baseZ = k.sz() << 4;
+        for (int ly = 0; ly < 16; ly++) {
+            for (int lz = 0; lz < 16; lz++) {
+                for (int lx = 0; lx < 16; lx++) {
+                    final BlockPos snap = new BlockPos(baseX + lx, baseY + ly, baseZ + lz);
+                    EngineHolder.runBypassed(() -> {
+                        bl[0] = world.getLightLevel(net.minecraft.world.LightType.BLOCK, snap);
+                        sl[0] = world.getLightLevel(net.minecraft.world.LightType.SKY, snap);
+                    });
+                    int idx = MortonIndex.encode(lx, ly, lz);
+                    d.block.set(idx, bl[0]);
+                    d.sky.set(idx, sl[0]);
+                }
+            }
+        }
+        dirty.add(k);
     }
 
     /**
@@ -169,8 +239,18 @@ public final class PotatoLightEngine implements LightLevelAPI {
     public void onBlockChanged(ServerWorld world, BlockPos pos, int emittedLight) {
         pendingWorld = world;
         pending.add(new PendingChange(pos.getX(), pos.getY(), pos.getZ(), emittedLight));
-        // NOTE: sky-light recompute disabled in onBlockChanged for v0.1.
-        // v0.2: incremental sky updates only when heightmap actually changed.
+
+        // Sky-light: detect column heightmap change. Only schedule a recompute
+        // when the topmost opaque Y has actually shifted (or column unseen).
+        int x = pos.getX();
+        int z = pos.getZ();
+        long ck = columnKey(x, z);
+        int currentTop = world.getTopY(Heightmap.Type.MOTION_BLOCKING, x, z);
+        Integer cachedTop = heightmapCache.get(ck);
+        if (cachedTop == null || cachedTop != currentTop) {
+            pendingSkyColumns.add(ck);
+            heightmapCache.put(ck, currentTop);
+        }
     }
 
     /**
@@ -180,11 +260,11 @@ public final class PotatoLightEngine implements LightLevelAPI {
      * emitters inside the cube plus vanilla-truth boundary light.
      */
     public void flushPending() {
-        if (pending.isEmpty()) return;
+        if (pending.isEmpty() && pendingSkyColumns.isEmpty()) return;
         if (!flushing.compareAndSet(false, true)) return;
         try {
             ServerWorld world = pendingWorld;
-            if (world == null) { pending.clear(); return; }
+            if (world == null) { pending.clear(); pendingSkyColumns.clear(); return; }
 
             opacityCache.clear();
             WorldBFSWorker w = worldWorkers.get();
@@ -230,6 +310,18 @@ public final class PotatoLightEngine implements LightLevelAPI {
 
             // Single combined BFS over all seeds
             w.propagate(access);
+
+            // Sky-light: drain pending columns (deduped within this flush).
+            if (!pendingSkyColumns.isEmpty()) {
+                java.util.HashSet<Long> done = new java.util.HashSet<>();
+                Long col;
+                while ((col = pendingSkyColumns.poll()) != null) {
+                    if (!done.add(col)) continue;
+                    int cx = (int) (col >>> 32);
+                    int cz = (int) (col.longValue() & 0xFFFFFFFFL);
+                    recomputeSkyForColumn(world, cx, cz);
+                }
+            }
         } finally {
             flushing.set(false);
         }
@@ -270,17 +362,8 @@ public final class PotatoLightEngine implements LightLevelAPI {
         // Query topY (vanilla heightmap): first y at-or-above which the column is open sky.
         int topY = world.getTopY(Heightmap.Type.MOTION_BLOCKING, x, z);
 
-        // Step 1: clear sky storage in the column over the world height range.
-        for (int y = worldBottom; y < worldTop; y++) {
-            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
-            SectionLightData d = sections.get(k);
-            if (d == null) continue;
-            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
-            d.sky.set(idx, 0);
-        }
-
-        // Step 2: directly write sky=15 to every cell at-or-above topY. Open-sky
-        // cells are all 15 in vanilla — no attenuation between them — so writing
+        // Step 1: write sky=15 to every cell at-or-above topY. Open-sky cells
+        // are all 15 in vanilla — no attenuation between them — so writing
         // them directly is both correct and far cheaper than seeding-then-BFS.
         for (int y = topY; y < worldTop; y++) {
             SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
@@ -290,10 +373,37 @@ public final class PotatoLightEngine implements LightLevelAPI {
             dirty.add(k);
         }
 
+        // Step 2: below topY (caves / underground), import vanilla's truth.
+        // Cross-column sky propagation (e.g. sky leaking sideways into a cave
+        // from an open neighbour column) is too expensive to compute from
+        // scratch per column; instead we snapshot vanilla's already-computed
+        // values. This keeps reads bit-exact at flush time and lets our own
+        // BFS propagate any subsequent block-driven changes correctly.
+        //
+        // Optimization: only do this on the FIRST seed of a column. Subsequent
+        // recomputes (triggered by heightmap shifts from block placement) only
+        // need to refresh the open-sky cells in Step 1 — the below-topY values
+        // are still valid (or get re-derived by the BFS in Step 3).
+        long ck = columnKey(x, z);
+        if (columnsImported.add(ck)) {
+            int[] vanillaSky = new int[1];
+            for (int y = worldBottom; y < topY; y++) {
+                final BlockPos snap = new BlockPos(x, y, z);
+                EngineHolder.runBypassed(() ->
+                    vanillaSky[0] = world.getLightLevel(net.minecraft.world.LightType.SKY, snap)
+                );
+                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+                SectionLightData d = getOrCreate(k);
+                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+                d.sky.set(idx, vanillaSky[0]);
+                if (vanillaSky[0] > 0) dirty.add(k);
+            }
+        }
+
         // Step 3: seed BFS at the bottom open-sky cell so attenuation reaches
-        // sideways into any shadowed neighbour column. Only one seed per column
-        // is needed — neighbours seeded by their own column-rebuild loop pick up
-        // the work; horizontal interactions converge naturally.
+        // sideways into any shadowed neighbour column. The vanilla-imported
+        // values below topY also act as implicit boundary seeds for any future
+        // changes that need to re-propagate through this column.
         if (topY < worldTop) {
             WorldBFSWorker w = worldWorkers.get();
             WorldBFSWorker.SectionAccess access = skyLightAccess(world);

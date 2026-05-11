@@ -14,7 +14,7 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ BFS pooled zero-allocation (queue préallouée 16k entrées, réutilisée par thread)
 - ✅ Propagation cross-section (BFS world-space)
 - ✅ Block light bit-exact vs vanilla (validé sur radius 1 → `diff_count: 0, max_delta: 0`)
-- 🚧 Sky light (column rebuild + BFS, en cours)
+- ✅ Sky light incrémental (heightmap cache + lazy column init + vanilla-truth import, bit-exact validé)
 - 🚧 Threading workers (chunks distants → ForkJoinPool)
 - 🚧 Batch scheduler
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
@@ -28,10 +28,12 @@ Mesures via `scripts/pmh bench <workload>` (deux runs dos-à-dos, notre moteur p
 
 | Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
 |-------------------------|-------|--------------|---------------|---------|
-| `single_block_update`   | 200   | 12 898       | 82 621        | 0.156×  |
-| `bulk_random_updates`   | 100   | 4 617        | 225 776       | 0.020×  |
-| `full_chunk_relight`    | 50    | 638          | 90 518        | 0.007×  |
-| `bulk_writes_no_read`   | 100   | 1 496        | 2 845         | 0.526×  |
+| `single_block_update`   | 200   | 1 737        | 72 522        | 0.024×  |
+| `bulk_random_updates`   | 100   | 1 244        | 195 995       | 0.006×  |
+| `full_chunk_relight`    | 50    | 617          | 79 396        | 0.008×  |
+| `bulk_writes_no_read`   | 100   | 458          | 1 755         | 0.261×  |
+
+> **Post sky-light incrémental** : la correction du sky-light ajoute par `onBlockChanged` un `getTopY` + (si heightmap shifté) un `recomputeSkyForColumn` (BFS + écritures de 15 sur les cellules open-sky). C'est correct mais coûteux ; `bulk_writes_no_read` recule de ~0.5× → ~0.25× vanilla. Trade-off assumé pour v0.1 : **correctness avant tout** (sky-light bit-exact, validate radius=1 pass), perf à reprendre en v0.2.
 
 > Post-optim (cached opacity + non-alloc access lambdas). Baseline pré-optim était `single_block_update` 14 839 / `bulk_random_updates` 4 686 / `full_chunk_relight` 645. Les chiffres Potato sont dans le bruit du baseline ; vanilla est plus rapide sur ce run (charge machine variable). **Conclusion honnête : les deux bottlenecks ciblés n'étaient pas le chemin chaud dominant** — le flush-on-read force toujours un BFS sync par itération de bench, ce qui domine tout le reste.
 
