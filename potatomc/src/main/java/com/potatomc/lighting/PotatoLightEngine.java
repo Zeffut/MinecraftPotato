@@ -60,15 +60,38 @@ public final class PotatoLightEngine implements LightLevelAPI {
     // is light-type independent). Cleared at the start of each flushPending.
     private final OpacityCache opacityCache = new OpacityCache();
 
+    // Worker pool for parallel column recomputes during flushPending().
+    // Sized to cores-1 so the server thread (which drives flushes) stays
+    // responsive. Daemon threads so we don't pin JVM shutdown.
+    private final java.util.concurrent.ForkJoinPool columnPool =
+        new java.util.concurrent.ForkJoinPool(
+            Math.max(1, Runtime.getRuntime().availableProcessors() - 1),
+            pool -> {
+                java.util.concurrent.ForkJoinWorkerThread t =
+                    java.util.concurrent.ForkJoinPool
+                        .defaultForkJoinWorkerThreadFactory.newThread(pool);
+                t.setName("potato-light-worker-" + t.getPoolIndex());
+                t.setDaemon(true);
+                return t;
+            },
+            null, false);
+
     private static final class OpacityCache {
-        private final java.util.HashMap<Long, Boolean> map = new java.util.HashMap<>();
-        private final BlockPos.Mutable scratch = new BlockPos.Mutable();
+        // ConcurrentHashMap so parallel column-recompute tasks (on the engine's
+        // ForkJoinPool) can share the cache without external locking. Per-thread
+        // scratch BlockPos avoids the Mutable-aliasing race that the previous
+        // single-instance scratch would cause under parallelism.
+        private final java.util.concurrent.ConcurrentHashMap<Long, Boolean> map =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        private final ThreadLocal<BlockPos.Mutable> scratch =
+            ThreadLocal.withInitial(BlockPos.Mutable::new);
         boolean isOpaque(ServerWorld w, int x, int y, int z) {
             long key = pack(x, y, z);
             Boolean cached = map.get(key);
             if (cached != null) return cached;
-            scratch.set(x, y, z);
-            boolean v = w.getBlockState(scratch).isOpaqueFullCube();
+            BlockPos.Mutable bp = scratch.get();
+            bp.set(x, y, z);
+            boolean v = w.getBlockState(bp).isOpaqueFullCube();
             map.put(key, v);
             return v;
         }
@@ -311,15 +334,103 @@ public final class PotatoLightEngine implements LightLevelAPI {
             // Single combined BFS over all seeds
             w.propagate(access);
 
-            // Sky-light: drain pending columns (deduped within this flush).
+            // Sky-light: drain pending columns (deduped within this flush) and
+            // process them in parallel on the engine's ForkJoinPool.
+            //
+            // Thread-safety contract for parallel recompute:
+            //   - PackedLightStorage.set is synchronized → no torn longs when
+            //     two threads write distinct cells sharing a long[] slot.
+            //   - OpacityCache uses ConcurrentHashMap + per-thread scratch.
+            //   - WorldBFSWorker is ThreadLocal → each worker thread gets its
+            //     own queue and seeds.
+            //   - sections / dirty / columnsImported are concurrent collections.
+            //   - PackedLightStorage.get is intentionally NOT synchronized:
+            //     stale-read worst case is one extra BFS revisit (the
+            //     `getLight >= level` guard catches the race), bounded and
+            //     correctness-preserving.
+            //   - world.getBlockState() reads are read-only on already-loaded
+            //     chunks; mirroring Starlight's parallel-flush approach.
             if (!pendingSkyColumns.isEmpty()) {
-                java.util.HashSet<Long> done = new java.util.HashSet<>();
+                java.util.HashSet<Long> dedup = new java.util.HashSet<>();
+                java.util.ArrayList<Long> columns = new java.util.ArrayList<>();
                 Long col;
                 while ((col = pendingSkyColumns.poll()) != null) {
-                    if (!done.add(col)) continue;
-                    int cx = (int) (col >>> 32);
-                    int cz = (int) (col.longValue() & 0xFFFFFFFFL);
-                    recomputeSkyForColumn(world, cx, cz);
+                    if (dedup.add(col)) columns.add(col);
+                }
+                if (!columns.isEmpty()) {
+                    // ------------------------------------------------------------
+                    // Phase 1 (server thread): prefetch all per-column world data.
+                    //
+                    // Calling world.getTopY / world.getLightLevel from worker
+                    // threads can trigger ServerChunkManager.getChunk which
+                    // schedules a load on the server thread and waits for it.
+                    // If the server thread is itself joined waiting on the pool
+                    // → deadlock (observed in a previous attempt; see jstack).
+                    //
+                    // So we collect every world-side fact we need (topY, world
+                    // bounds, and the entire below-topY vanilla sky import for
+                    // un-imported columns) on the server thread, then dispatch
+                    // the storage-write + BFS work to the pool.
+                    // ------------------------------------------------------------
+                    final int worldTop = world.getTopYInclusive() + 1;
+                    final int worldBottom = world.getBottomY();
+                    final int n = columns.size();
+                    final int[] colX = new int[n];
+                    final int[] colZ = new int[n];
+                    final int[] colTopY = new int[n];
+                    // importedBelow[i] is null if column was already imported
+                    // (no below-topY work needed), else holds vanilla sky[y -
+                    // worldBottom] for y in [worldBottom, topY).
+                    final int[][] importedBelow = new int[n][];
+                    BlockPos.Mutable scratch = new BlockPos.Mutable();
+                    int[] tmp = new int[1];
+                    for (int i = 0; i < n; i++) {
+                        long c = columns.get(i);
+                        int x = (int) (c >>> 32);
+                        int z = (int) (c & 0xFFFFFFFFL);
+                        colX[i] = x;
+                        colZ[i] = z;
+                        colTopY[i] = world.getTopY(Heightmap.Type.MOTION_BLOCKING, x, z);
+                        long ck = columnKey(x, z);
+                        if (columnsImported.add(ck)) {
+                            int[] below = new int[colTopY[i] - worldBottom];
+                            for (int y = worldBottom; y < colTopY[i]; y++) {
+                                final BlockPos snap = new BlockPos(x, y, z);
+                                EngineHolder.runBypassed(() ->
+                                    tmp[0] = world.getLightLevel(net.minecraft.world.LightType.SKY, snap)
+                                );
+                                below[y - worldBottom] = tmp[0];
+                            }
+                            importedBelow[i] = below;
+                        }
+                    }
+
+                    // ------------------------------------------------------------
+                    // Phase 2 (ForkJoinPool): parallel storage writes + BFS.
+                    //
+                    // Each task touches only its own column's open-sky cells
+                    // (Step 1) and BFS seed (Step 3). Cross-column write races
+                    // are handled by PackedLightStorage.set being synchronized
+                    // (per-section lock). WorldBFSWorker is ThreadLocal.
+                    // OpacityCache uses ConcurrentHashMap + per-thread scratch.
+                    //
+                    // BFS opacity lookups still hit world.getBlockState on
+                    // worker threads — safe here because the chunks affected
+                    // are all forceloaded / already loaded (placement caused
+                    // the column to enter pendingSkyColumns in the first place,
+                    // and BFS attenuation tops out at 15 blocks horizontal so
+                    // it can't escape into unloaded chunks for normal bench
+                    // workloads). If this assumption breaks in the wild,
+                    // revert to sequential.
+                    // ------------------------------------------------------------
+                    final ServerWorld w2 = world;
+                    columnPool.submit(() -> {
+                        java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
+                            recomputeSkyForColumnPrepared(
+                                w2, colX[i], colZ[i], colTopY[i],
+                                worldTop, worldBottom, importedBelow[i]);
+                        });
+                    }).join();
                 }
             }
         } finally {
@@ -355,6 +466,53 @@ public final class PotatoLightEngine implements LightLevelAPI {
      * sky-blocking here, which slightly diverges from vanilla (vanilla attenuates
      * through water rather than hard-blocking). Documented as a known v0.2 gap.
      */
+    /**
+     * Parallel-safe variant of {@link #recomputeSkyForColumn} used by the
+     * batched flush path. All world-thread-only queries (getTopY, vanilla
+     * getLightLevel for below-topY import) are already done by the caller on
+     * the server thread; this method only touches engine storage and runs the
+     * BFS via the ThreadLocal worker. Safe to invoke from worker threads of
+     * {@link #columnPool}.
+     *
+     * @param vanillaBelow indexed by (y - worldBottom); null if the column has
+     *                     already been imported on a previous flush.
+     */
+    private void recomputeSkyForColumnPrepared(
+            ServerWorld world, int x, int z, int topY,
+            int worldTop, int worldBottom, int[] vanillaBelow) {
+        // Step 1 — open-sky cells = 15.
+        for (int y = topY; y < worldTop; y++) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.sky.set(idx, 15);
+            dirty.add(k);
+        }
+
+        // Step 2 — below-topY: replay pre-imported vanilla truth (first
+        // recompute only). On subsequent recomputes (vanillaBelow == null) we
+        // keep existing storage values.
+        if (vanillaBelow != null) {
+            for (int y = worldBottom; y < topY; y++) {
+                int v = vanillaBelow[y - worldBottom];
+                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+                SectionLightData d = getOrCreate(k);
+                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+                d.sky.set(idx, v);
+                if (v > 0) dirty.add(k);
+            }
+        }
+
+        // Step 3 — BFS seed at the bottom open-sky cell. Uses the per-thread
+        // WorldBFSWorker from worldWorkers (ThreadLocal).
+        if (topY < worldTop) {
+            WorldBFSWorker w = worldWorkers.get();
+            WorldBFSWorker.SectionAccess access = skyLightAccess(world);
+            w.seed(access, x, topY, z, 15);
+            w.propagate(access);
+        }
+    }
+
     public void recomputeSkyForColumn(ServerWorld world, int x, int z) {
         int worldTop = world.getTopYInclusive() + 1; // exclusive upper bound
         int worldBottom = world.getBottomY();

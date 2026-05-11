@@ -15,12 +15,12 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - ✅ Propagation cross-section (BFS world-space)
 - ✅ Block light bit-exact vs vanilla (validé sur radius 1 → `diff_count: 0, max_delta: 0`)
 - ✅ Sky light incrémental (heightmap cache + lazy column init + vanilla-truth import, bit-exact validé)
-- 🚧 Threading workers (chunks distants → ForkJoinPool)
+- ⚠️ Threading workers (ForkJoinPool pour les recompute de colonnes en parallèle) — implémenté, bit-exact validé, mais sans gain mesurable sur `bulk_writes_no_read` (cf. notes ci-dessous)
 - 🚧 Batch scheduler
 - ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
 - 🚧 Comparatif Starlight / Phosphor (à venir)
 
-### Benchmark results — v0.1 (seed=42, post-batching)
+### Benchmark results — v0.2-wip (seed=42, post-parallel-column-flush)
 
 > ⚠️ **Disclaimer** : chiffres pris pendant qu'une autre tâche de dev tournait en parallèle sur la même machine. Seul le **ratio Potato/Vanilla mesuré dans le même run** est interprétable. Campagne reproductible sur machine idle planifiée.
 
@@ -28,10 +28,17 @@ Mesures via `scripts/pmh bench <workload>` (deux runs dos-à-dos, notre moteur p
 
 | Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
 |-------------------------|-------|--------------|---------------|---------|
-| `single_block_update`   | 200   | 1 737        | 72 522        | 0.024×  |
-| `bulk_random_updates`   | 100   | 1 244        | 195 995       | 0.006×  |
-| `full_chunk_relight`    | 50    | 617          | 79 396        | 0.008×  |
-| `bulk_writes_no_read`   | 100   | 458          | 1 755         | 0.261×  |
+| `single_block_update`   | 200   | 2 820        | 108 973       | 0.026×  |
+| `bulk_random_updates`   | 100   | 2 241        | 245 019       | 0.009×  |
+| `full_chunk_relight`    | 50    | 574          | 47 715        | 0.012×  |
+| `bulk_writes_no_read`   | 100   | 453          | 2 578         | 0.176×  |
+
+> **v0.2-wip — column-parallel sky flush** : `flushPending()` dispatche désormais les recompute de colonnes sur un `ForkJoinPool` dédié (cores-1, threads daemon). Phase 1 (server thread) prefetch `getTopY` + import vanilla-truth pour les colonnes neuves — obligatoire car `World.getChunk` est server-thread-pinned et provoque un deadlock sinon. Phase 2 (worker pool) écritures `PackedLightStorage.set` synchronisées + BFS via `WorldBFSWorker` ThreadLocal. Bit-exact préservé (`validate radius=1 → diff_count: 0`). **Mais gain perf zéro sur `bulk_writes_no_read`** : 453 vs 458 ops/s avant — dans le bruit. Le bottleneck dominant n'est pas la parallélisation de colonnes mais :
+> 1. `world.getBlockState()` (via OpacityCache) reste un point de contention partagé (ConcurrentHashMap lookups) ;
+> 2. `PackedLightStorage.set synchronized` ajoute un coût constant à chaque écriture, même sur le chemin séquentiel ;
+> 3. Le dispatch ForkJoin (submit + join + parallelStream split) ajoute une latence fixe par flush qui annule le gain pour 50 colonnes "courtes" (~256 writes + BFS local).
+>
+> Prochain candidat : éliminer le flush-on-read (rendre `getLightLevel` non-bloquant via valeurs stale-acceptables entre ticks), ce qui libérerait le batching différé déjà en place.
 
 > **Post sky-light incrémental** : la correction du sky-light ajoute par `onBlockChanged` un `getTopY` + (si heightmap shifté) un `recomputeSkyForColumn` (BFS + écritures de 15 sur les cellules open-sky). C'est correct mais coûteux ; `bulk_writes_no_read` recule de ~0.5× → ~0.25× vanilla. Trade-off assumé pour v0.1 : **correctness avant tout** (sky-light bit-exact, validate radius=1 pass), perf à reprendre en v0.2.
 

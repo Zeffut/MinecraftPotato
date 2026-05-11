@@ -20,7 +20,14 @@ public final class PackedLightStorage {
         return (int) ((data[longIdx] >>> bitOffset) & MASK);
     }
 
-    public void set(int index, int value) {
+    /**
+     * Writes a 4-bit value at the given index. {@code synchronized} so that
+     * concurrent column-recompute tasks (running on the engine's ForkJoinPool)
+     * cannot tear a long when two threads write distinct cells that share the
+     * same {@code long[longIdx]} slot. Lock is per-storage (i.e. per-section),
+     * so disjoint sections never contend.
+     */
+    public synchronized void set(int index, int value) {
         int longIdx = index >>> 4;
         int bitOffset = (index & 0xF) << 2;
         long cleared = data[longIdx] & ~(MASK << bitOffset);
