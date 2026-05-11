@@ -26,13 +26,16 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 
 Mesures via `scripts/pmh bench <workload>` (deux runs dos-à-dos, notre moteur puis vanilla via `EngineHolder.runBypassed`).
 
-| Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup |
-|-----------------------|-------|--------------|---------------|---------|
-| `single_block_update` | 200   | 12 981       | 64 079        | 0.20×   |
-| `bulk_random_updates` | 100   | 4 283        | 240 963       | 0.018×  |
-| `full_chunk_relight`  | 50    | 439          | 84 293        | 0.005×  |
+| Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
+|-------------------------|-------|--------------|---------------|---------|
+| `single_block_update`   | 200   | 12 898       | 82 621        | 0.156×  |
+| `bulk_random_updates`   | 100   | 4 617        | 225 776       | 0.020×  |
+| `full_chunk_relight`    | 50    | 638          | 90 518        | 0.007×  |
+| `bulk_writes_no_read`   | 100   | 1 496        | 2 845         | 0.526×  |
 
 > Post-optim (cached opacity + non-alloc access lambdas). Baseline pré-optim était `single_block_update` 14 839 / `bulk_random_updates` 4 686 / `full_chunk_relight` 645. Les chiffres Potato sont dans le bruit du baseline ; vanilla est plus rapide sur ce run (charge machine variable). **Conclusion honnête : les deux bottlenecks ciblés n'étaient pas le chemin chaud dominant** — le flush-on-read force toujours un BFS sync par itération de bench, ce qui domine tout le reste.
+
+**`bulk_writes_no_read` — la forme réaliste.** Ce workload place 50 blocs lumineux puis fait **un seul** read en fin de tick, mimant ce que fait vraiment Minecraft (génération de chunk, explosion, cascade de pistons, redstone). C'est là que le batching différé est censé briller : au lieu de 50 flushes synchrones, on en fait un seul. Le résultat (~0.5× vanilla) le confirme — sur un workload où le batching peut s'exprimer, l'écart se réduit d'un ordre de grandeur par rapport aux workloads read-heavy (0.02×). Le BFS lui-même reste plus cher que vanilla, mais le batching récupère une partie significative du coût ; reste à attaquer le BFS (incrémental sky-light, ForkJoinPool, allocations).
 
 **Lecture honnête** : on est encore loin derrière vanilla. Le batching différé est en place côté écriture (`onBlockChanged` queue les changements, le BFS est flushé sur tick ou avant un read), mais le bench lit la lumière après *chaque* placement, ce qui force un flush sync à chaque itération et annule le bénéfice du batching. Les vrais gains viendront quand on :
 
@@ -51,6 +54,7 @@ scripts/pmh cmd 'forceload add -2 -2 2 2'
 scripts/pmh bench single_block_update 200 42
 scripts/pmh bench bulk_random_updates 100 42
 scripts/pmh bench full_chunk_relight 50 42
+scripts/pmh bench bulk_writes_no_read 100 42
 # ou : scripts/test-bench.sh  (smoke test bout-en-bout)
 ```
 

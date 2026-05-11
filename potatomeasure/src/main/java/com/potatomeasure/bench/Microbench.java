@@ -13,7 +13,7 @@ import java.util.Random;
 
 public final class Microbench {
 
-    public enum Workload { SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT }
+    public enum Workload { SINGLE_BLOCK_UPDATE, BULK_RANDOM_UPDATES, FULL_CHUNK_RELIGHT, BULK_WRITES_NO_READ }
     public enum Engine { POTATO, VANILLA }
 
     public record Result(
@@ -60,6 +60,7 @@ public final class Microbench {
                 case SINGLE_BLOCK_UPDATE -> singleBlockUpdate(world, rng);
                 case BULK_RANDOM_UPDATES -> bulkRandomUpdates(world, rng);
                 case FULL_CHUNK_RELIGHT -> fullChunkRelight(world, rng);
+                case BULK_WRITES_NO_READ -> bulkWritesNoRead(world, rng);
             }
         };
         if (engine == Engine.VANILLA) PotatoMCBridge.runBypassed(task);
@@ -104,6 +105,32 @@ public final class Microbench {
             int z = sz + rng.nextInt(16);
             world.setBlockState(new BlockPos(x, y, z), Blocks.AIR.getDefaultState(), 2);
         }
+    }
+
+    /**
+     * Realistic batching workload: place 50 glowstones in a random region,
+     * then trigger ONE light resolution at the end. Mirrors what vanilla does
+     * during chunk gen / explosion / piston cascade — the case where deferred
+     * batching should shine. No intermediate reads to force sync flushes.
+     */
+    private static void bulkWritesNoRead(ServerWorld world, Random rng) {
+        java.util.List<BlockPos> placed = new java.util.ArrayList<>(50);
+        for (int i = 0; i < 50; i++) {
+            int x = rng.nextInt(32) - 16;
+            int y = 100 + rng.nextInt(16);
+            int z = rng.nextInt(32) - 16;
+            BlockPos pos = new BlockPos(x, y, z);
+            world.setBlockState(pos, Blocks.GLOWSTONE.getDefaultState(), 2);
+            placed.add(pos);
+        }
+        // ONE read at the end — triggers a single batched flush in our engine,
+        // vs ~50 individual vanilla updates that have already happened.
+        world.getLightLevel(LightType.BLOCK, new BlockPos(0, 108, 0));
+        // Clean up so the next iteration starts fresh
+        for (BlockPos pos : placed) {
+            world.setBlockState(pos, Blocks.AIR.getDefaultState(), 2);
+        }
+        world.getLightLevel(LightType.BLOCK, new BlockPos(0, 108, 0));
     }
 
     public static Map<String, Object> resultToJson(Result r) {

@@ -27,4 +27,10 @@ R=$("$PMH" bench full_chunk_relight 50 42)
 echo "$R" | jq -c '{workload, iterations, potato_ops:.potato.ops_per_sec, vanilla_ops:.vanilla.ops_per_sec, speedup:.speedup_potato_over_vanilla}'
 echo "$R" | jq -e '.potato.ops_per_sec > 0' >/dev/null
 
+echo "[bench-test] bulk_writes_no_read x 100"
+R=$("$PMH" bench bulk_writes_no_read 100 42)
+echo "$R" | jq -c '{workload, iterations, potato_ops:.potato.ops_per_sec, vanilla_ops:.vanilla.ops_per_sec, speedup:.speedup_potato_over_vanilla}'
+echo "$R" | jq -e '.potato.ops_per_sec > 0' >/dev/null
+echo "$R" | jq -e '.vanilla.ops_per_sec > 0' >/dev/null
+
 echo "[bench-test] PASS"
