@@ -44,7 +44,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
         int idx = MortonIndex.encode(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
         data.opaque[idx] = opaque;
         BFSWorker w = workers.get();
-        w.seed(idx, emittedLight);
+        w.seed(data.block, data.opaque, idx, emittedLight);
         w.propagate(data.block, data.opaque);
         markDirty(k);
     }

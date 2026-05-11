@@ -14,7 +14,7 @@ class BFSWorkerTest {
         PackedLightStorage s = new PackedLightStorage();
         BFSWorker w = new BFSWorker();
         boolean[] opaque = new boolean[4096];
-        w.seed(idx(8, 8, 8), 15);
+        w.seed(s, opaque, idx(8, 8, 8), 15);
         w.propagate(s, opaque);
 
         assertEquals(15, s.get(idx(8, 8, 8)));
@@ -31,7 +31,7 @@ class BFSWorkerTest {
         boolean[] opaque = new boolean[4096];
         opaque[idx(9, 8, 8)] = true;
 
-        w.seed(idx(8, 8, 8), 15);
+        w.seed(s, opaque, idx(8, 8, 8), 15);
         w.propagate(s, opaque);
 
         assertEquals(15, s.get(idx(8, 8, 8)));
@@ -48,7 +48,7 @@ class BFSWorkerTest {
         BFSWorker w = new BFSWorker();
         boolean[] opaque = new boolean[4096];
 
-        w.seed(idx(8, 8, 8), 5);
+        w.seed(s, opaque, idx(8, 8, 8), 5);
         w.propagate(s, opaque);
 
         assertEquals(12, s.get(idx(8, 8, 8)));
@@ -60,8 +60,8 @@ class BFSWorkerTest {
         PackedLightStorage s = new PackedLightStorage();
         BFSWorker w = new BFSWorker();
         boolean[] opaque = new boolean[4096];
-        w.seed(idx(0, 8, 8), 15);
-        w.seed(idx(15, 8, 8), 15);
+        w.seed(s, opaque, idx(0, 8, 8), 15);
+        w.seed(s, opaque, idx(15, 8, 8), 15);
         w.propagate(s, opaque);
 
         assertEquals(8, s.get(idx(7, 8, 8)));
@@ -73,9 +73,24 @@ class BFSWorkerTest {
         PackedLightStorage s = new PackedLightStorage();
         BFSWorker w = new BFSWorker();
         boolean[] opaque = new boolean[4096];
-        w.seed(idx(8, 8, 8), 0);
+        w.seed(s, opaque, idx(8, 8, 8), 0);
         w.propagate(s, opaque);
 
         assertEquals(0, s.get(idx(8, 8, 8)));
+    }
+
+    @Test
+    void opaqueEmitterStillEmits() {
+        PackedLightStorage s = new PackedLightStorage();
+        BFSWorker w = new BFSWorker();
+        boolean[] opaque = new boolean[4096];
+        opaque[idx(8, 8, 8)] = true; // emitter cell is opaque (like glowstone)
+
+        w.seed(s, opaque, idx(8, 8, 8), 15);
+        w.propagate(s, opaque);
+
+        assertEquals(15, s.get(idx(8, 8, 8))); // emitter holds its own level
+        assertEquals(14, s.get(idx(9, 8, 8))); // light escapes to non-opaque neighbor
+        assertEquals(13, s.get(idx(10, 8, 8)));
     }
 }

@@ -14,9 +14,27 @@ public final class BFSWorker {
 
     private final PooledQueue queue = new PooledQueue(16384);
 
-    public void seed(int mortonIdx, int level) {
+    /**
+     * Seeds an emitter at the given Morton index with the given light level.
+     * Writes the level directly to storage (regardless of opacity — the emitter
+     * itself holds the emission), then enqueues non-opaque neighbors at level-1.
+     * Call {@link #propagate} after seeding.
+     */
+    public void seed(PackedLightStorage storage, boolean[] opaque, int mortonIdx, int level) {
         if (level <= 0) return;
-        queue.enqueue((mortonIdx << LEVEL_BITS) | (level & LEVEL_MASK));
+        if (storage.get(mortonIdx) >= level) return;
+        storage.set(mortonIdx, level);
+        if (level <= 1) return;
+        int nextLevel = level - 1;
+        int x = MortonIndex.decodeX(mortonIdx);
+        int y = MortonIndex.decodeY(mortonIdx);
+        int z = MortonIndex.decodeZ(mortonIdx);
+        if (x > 0)  enqueue(MortonIndex.encode(x - 1, y, z), nextLevel, storage, opaque);
+        if (x < 15) enqueue(MortonIndex.encode(x + 1, y, z), nextLevel, storage, opaque);
+        if (y > 0)  enqueue(MortonIndex.encode(x, y - 1, z), nextLevel, storage, opaque);
+        if (y < 15) enqueue(MortonIndex.encode(x, y + 1, z), nextLevel, storage, opaque);
+        if (z > 0)  enqueue(MortonIndex.encode(x, y, z - 1), nextLevel, storage, opaque);
+        if (z < 15) enqueue(MortonIndex.encode(x, y, z + 1), nextLevel, storage, opaque);
     }
 
     public void propagate(PackedLightStorage storage, boolean[] opaque) {
@@ -36,17 +54,18 @@ public final class BFSWorker {
             int y = MortonIndex.decodeY(idx);
             int z = MortonIndex.decodeZ(idx);
 
-            if (x > 0)  enqueueNeighbor(MortonIndex.encode(x - 1, y, z), nextLevel, storage);
-            if (x < 15) enqueueNeighbor(MortonIndex.encode(x + 1, y, z), nextLevel, storage);
-            if (y > 0)  enqueueNeighbor(MortonIndex.encode(x, y - 1, z), nextLevel, storage);
-            if (y < 15) enqueueNeighbor(MortonIndex.encode(x, y + 1, z), nextLevel, storage);
-            if (z > 0)  enqueueNeighbor(MortonIndex.encode(x, y, z - 1), nextLevel, storage);
-            if (z < 15) enqueueNeighbor(MortonIndex.encode(x, y, z + 1), nextLevel, storage);
+            if (x > 0)  enqueue(MortonIndex.encode(x - 1, y, z), nextLevel, storage, opaque);
+            if (x < 15) enqueue(MortonIndex.encode(x + 1, y, z), nextLevel, storage, opaque);
+            if (y > 0)  enqueue(MortonIndex.encode(x, y - 1, z), nextLevel, storage, opaque);
+            if (y < 15) enqueue(MortonIndex.encode(x, y + 1, z), nextLevel, storage, opaque);
+            if (z > 0)  enqueue(MortonIndex.encode(x, y, z - 1), nextLevel, storage, opaque);
+            if (z < 15) enqueue(MortonIndex.encode(x, y, z + 1), nextLevel, storage, opaque);
         }
         queue.reset();
     }
 
-    private void enqueueNeighbor(int idx, int level, PackedLightStorage storage) {
+    private void enqueue(int idx, int level, PackedLightStorage storage, boolean[] opaque) {
+        if (opaque[idx]) return;
         if (storage.get(idx) >= level) return;
         queue.enqueue((idx << LEVEL_BITS) | level);
     }
