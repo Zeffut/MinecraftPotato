@@ -4,7 +4,13 @@
 
 Ambition : remplacer à terme l'écosystème Sodium + Lithium + FerriteCore + Starlight + Krypton par un mod unifié, conçu pour des configs ultra légères sans sacrifier les configs musclées.
 
-## État actuel — v0.1 (work in progress)
+## État actuel — v0.2.0-beta
+
+**Highlights du tag actuel :**
+- ✅ **Memory module bat FerriteCore** (-17 MB vs vanilla, FerriteCore -5 MB sur le même bench ; stack potato+FerriteCore = -23 MB)
+- ✅ **Lighting engine bit-exact vs vanilla** (block + sky, validate `diff_count: 0`)
+- ✅ **Aucun moteur de lumière concurrent maintenu sur 1.21.11** (Starlight stoppé à 1.20.4)
+- ⚠️ **Lighting perf** : entre 0.08-0.36× vanilla sur workloads synthétiques (vanilla 1.21 est déjà très optimisé)
 
 ### Lighting engine custom
 
