@@ -74,4 +74,21 @@ class JsonTest {
         Map<String, Object> r = Json.parseObject("{\"s\":\"a\\\"b\\nc\"}");
         assertEquals("a\"b\nc", r.get("s"));
     }
+
+    @Test
+    void writeNaNAndInfinityBecomeNull() {
+        assertEquals("null", Json.write(Double.NaN));
+        assertEquals("null", Json.write(Double.POSITIVE_INFINITY));
+        assertEquals("null", Json.write(Double.NEGATIVE_INFINITY));
+    }
+
+    @Test
+    void parseInvalidNumberThrows() {
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"n\":1.2.3}"));
+    }
+
+    @Test
+    void parseTruncatedUnicodeEscapeThrows() {
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"s\":\"\\u12\"}"));
+    }
 }

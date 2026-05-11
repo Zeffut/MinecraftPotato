@@ -24,6 +24,16 @@ public final class Json {
     private static void writeTo(StringBuilder sb, Object v) {
         if (v == null) { sb.append("null"); return; }
         if (v instanceof Boolean b) { sb.append(b ? "true" : "false"); return; }
+        if (v instanceof Double d) {
+            if (Double.isNaN(d) || Double.isInfinite(d)) sb.append("null");
+            else sb.append(d.toString());
+            return;
+        }
+        if (v instanceof Float fl) {
+            if (Float.isNaN(fl) || Float.isInfinite(fl)) sb.append("null");
+            else sb.append(fl.toString());
+            return;
+        }
         if (v instanceof Number n) { sb.append(n.toString()); return; }
         if (v instanceof CharSequence s) { writeString(sb, s.toString()); return; }
         if (v instanceof Map<?, ?> m) {
@@ -156,8 +166,13 @@ public final class Json {
                         case 'b' -> sb.append('\b');
                         case 'f' -> sb.append('\f');
                         case 'u' -> {
+                            if (i + 4 > s.length()) throw new IllegalArgumentException("truncated \\u escape");
                             String hex = s.substring(i, i + 4);
-                            sb.append((char) Integer.parseInt(hex, 16));
+                            try {
+                                sb.append((char) Integer.parseInt(hex, 16));
+                            } catch (NumberFormatException nfe) {
+                                throw new IllegalArgumentException("bad unicode escape: " + hex);
+                            }
                             i += 4;
                         }
                         default -> throw new IllegalArgumentException("bad escape \\" + n);
@@ -183,8 +198,12 @@ public final class Json {
             if (peek() == '-') i++;
             while (i < s.length() && (Character.isDigit(s.charAt(i)) || ".eE+-".indexOf(s.charAt(i)) >= 0)) i++;
             String n = s.substring(start, i);
-            if (n.contains(".") || n.contains("e") || n.contains("E")) return Double.parseDouble(n);
-            return Long.parseLong(n);
+            try {
+                if (n.contains(".") || n.contains("e") || n.contains("E")) return Double.parseDouble(n);
+                return Long.parseLong(n);
+            } catch (NumberFormatException nfe) {
+                throw new IllegalArgumentException("invalid number: " + n);
+            }
         }
 
         void expect(char c) {
