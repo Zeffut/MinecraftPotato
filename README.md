@@ -22,6 +22,8 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 
 ### Benchmark results — v0.1 baseline (premières mesures, seed=42)
 
+> ⚠️ **Disclaimer** : ces chiffres ont été pris pendant qu'une autre tâche de dev tournait en parallèle sur la même machine. Les valeurs absolues sont à prendre avec précaution — seul le **ratio Potato/Vanilla mesuré dans le même run** est fiable (les deux moteurs subissaient la même charge système). Une vraie campagne de bench reproductible sur machine idle est planifiée pour v0.2.
+
 Mesures via `scripts/pmh bench <workload>` sur le même serveur headless, en routant la même charge soit dans notre moteur soit dans vanilla via `EngineHolder.runBypassed`. Latences en nanosecondes.
 
 | Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup | Potato p50 / p95 / p99 |
