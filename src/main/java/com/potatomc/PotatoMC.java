@@ -20,6 +20,11 @@ public final class PotatoMC implements ModInitializer {
         CompatGuard.evaluate();
         if (CompatGuard.isActive()) {
             com.potatomc.lighting.bridge.EngineHolder.set(LIGHT_ENGINE);
+            // Deferred batching: drain pending block-light changes once per tick.
+            // Reads also trigger a synchronous flush (see PotatoLightEngine.getLightLevel).
+            net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(
+                server -> LIGHT_ENGINE.flushPending()
+            );
             // NOTE: aggressive CHUNK_LOAD pre-population disabled — caused server boot to hang
             // on spawn-area generation (~256 columns × 25 chunks × full-height BFS each).
             // Sky-light is now lazy: populated on the first block change in each column.
