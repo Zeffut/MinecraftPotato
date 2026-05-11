@@ -253,6 +253,13 @@ Le repo est un **monorepo Gradle** produisant deux jars Fabric :
 
 `potatomeasure` ne compile **aucun** import `com.potatomc.*` : il accède au moteur via réflexion (`PotatoMCBridge`) ce qui lui permet de bencher aussi vanilla / Starlight / Lithium sans PotatoMC installé.
 
+⚠️ **Build footgun multi-module** : si `./gradlew build` échoue avec `Failed to setup Minecraft, NoSuchFileException: potatomeasure-*-dev.jar` (souvent après un clean ou changement de version), builder d'abord `:potatomeasure` seul :
+```bash
+./gradlew :potatomeasure:jar --configure-on-demand
+./gradlew build
+```
+Cause : Loom multi-module configure `:potatomc` avant que `:potatomeasure` ne soit assemblé, et la dépendance `modLocalRuntime project(':potatomeasure')` exige le jar à configure-time.
+
 ```bash
 ./gradlew build              # compile les deux jars + tests
 ./gradlew test               # uniquement les tests JUnit (45 tests)
