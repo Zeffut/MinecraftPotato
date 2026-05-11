@@ -25,6 +25,30 @@ Vanilla 1.21.x a énormément optimisé la lumière depuis Starlight (qui a stop
 
 Le module reste **dans le repo** pour : la recherche, l'opt-in pour les configs où vanilla pèche, et l'utilisation comme labo (le harness `/light`, `/validate`, `/stats` reste fonctionnel pour benchmark vanilla).
 
+### Memory bench — v0.2.1-wip (NbtKeyInterner + opt-in NibbleArrayInterner, 2026-05-11)
+
+Stack a tenté d'ajouter deux dédupeurs au-dessus de `PropertyMapInterner` :
+- **NbtKeyInterner** (actif par défaut) — intercepte `NbtCompound.put` + `putXxx` (12 overloads) et factorise les clés courtes (≤64 chars).
+- **NibbleArrayInterner** (opt-in via `-Dpotatomc.memory.nibble.enabled=true`) — canonicalise les `byte[2048]` uniformes (all-zero / all-fifteen) à la construction de `ChunkNibbleArray`. **Désactivé par défaut** : vanilla mute le champ `bytes` en place via `set()`/`clear()`, partager une référence canonique corrompt les sections sœurs au premier write. Strict read-only ou copy-on-write requis avant on-by-default.
+
+Bench `scripts/test-memory.sh` (289 chunks, fresh world, post-2× System.gc) :
+
+| Config              | heap_used_mb | Δ vs vanilla |
+|---------------------|--------------|--------------|
+| vanilla             | 222          | —            |
+| ferritecore         | 229          | +7           |
+| memory-only         | 224          | **+2**       |
+| lighting-only       | 249          | +27          |
+| potato              | 221          | -1           |
+| potato+ferritecore  | 243          | +21          |
+
+**Lecture honnête** : sur cette charge (289 chunks forceload, world neuf, pas d'entités, peu de NBT persistant), NbtKeyInterner n'apporte pas de gain mesurable. Le bench v0.2.0-beta montrait -17 MB avec PropertyMapInterner seul ; la nouvelle baseline vanilla a glissé de -13 MB et le gain memory s'évanouit dans le bruit. Le snapshot heap à un instant T est trop noisy pour distinguer +2 MB de 0. Pas de tag v0.3.0-beta. La table d'intern (`ConcurrentHashMap<String,String>`) a un coût fixe non-amorti sur cette charge ; sur un serveur réel avec milliers d'entités persistées le ratio s'inverse probablement, mais ce bench ne le démontre pas.
+
+**Décisions** :
+- NbtKeyInterner reste compilé et armé (faible coût, espéré rentable sur charges entité-lourdes).
+- NibbleArrayInterner reste opt-in et flaggé expérimental jusqu'à implémentation copy-on-write.
+- Pas de tag tant que `memory-only ≥ -30 MB` non démontré sur un bench moins synthétique.
+
 ### Prochaines features qui visent vraiment de la perf user-visible
 
 - 🚧 Module GC pressure : string interning sur NBT tag keys + BlockPos pool

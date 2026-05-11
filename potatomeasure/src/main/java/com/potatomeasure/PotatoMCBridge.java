@@ -165,6 +165,20 @@ public final class PotatoMCBridge {
             out.put("property_lookups", (long) interner.getMethod("lookupsCount").invoke(null));
             out.put("property_hits", (long) interner.getMethod("hitsCount").invoke(null));
             out.put("property_bytes_saved_estimate", (long) interner.getMethod("estimatedBytesSaved").invoke(null));
+            try {
+                Class<?> nib = Class.forName("com.potatomc.memory.dedup.NibbleArrayInterner");
+                out.put("nibble_lookups", (long) nib.getMethod("lookupsCount").invoke(null));
+                out.put("nibble_zero_hits", (long) nib.getMethod("zeroHitsCount").invoke(null));
+                out.put("nibble_fifteen_hits", (long) nib.getMethod("fifteenHitsCount").invoke(null));
+                out.put("nibble_bytes_saved", (long) nib.getMethod("estimatedBytesSaved").invoke(null));
+            } catch (Throwable ignored) {}
+            try {
+                Class<?> nbt = Class.forName("com.potatomc.memory.dedup.NbtKeyInterner");
+                out.put("nbt_key_lookups", (long) nbt.getMethod("lookupsCount").invoke(null));
+                out.put("nbt_key_hits", (long) nbt.getMethod("hitsCount").invoke(null));
+                out.put("nbt_keys_interned", (long) nbt.getMethod("internedCount").invoke(null));
+                out.put("nbt_key_bytes_saved", (long) nbt.getMethod("estimatedBytesSaved").invoke(null));
+            } catch (Throwable ignored) {}
             return out;
         } catch (Throwable t) { return Collections.emptyMap(); }
     }

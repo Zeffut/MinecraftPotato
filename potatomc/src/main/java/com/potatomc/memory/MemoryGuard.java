@@ -3,17 +3,21 @@ package com.potatomc.memory;
 import com.potatomc.PotatoMC;
 
 /**
- * Kill-switch for the memory module (PropertyMapInterner). Honors:
+ * Kill-switch for the memory module. Honors:
  * <ul>
  *   <li>{@code -Dpotatomc.disabled=true} — disables everything (alias)</li>
- *   <li>{@code -Dpotatomc.memory.disabled=true} — disables memory only</li>
+ *   <li>{@code -Dpotatomc.memory.disabled=true} — disables memory wholesale</li>
+ *   <li>{@code -Dpotatomc.memory.nibble.enabled=true} — opt-in for
+ *       NibbleArrayInterner (off by default; canonical arrays are mutably
+ *       shared and unsafe with vanilla in-place mutation).</li>
  * </ul>
  *
- * <p>Evaluated once from {@link PotatoMemory#init()}; the {@code StateMixin}
- * consults {@link #isActive()} on every constructor invocation.</p>
+ * <p>Evaluated once from {@link PotatoMemory#init()}; mixins consult the
+ * relevant getter on every interception.</p>
  */
 public final class MemoryGuard {
     private static volatile boolean active = true;
+    private static volatile boolean nibbleActive = false;
     private static boolean evaluated = false;
 
     private MemoryGuard() {}
@@ -27,8 +31,13 @@ public final class MemoryGuard {
         } else {
             PotatoMC.LOGGER.info("[PotatoMC] memory module: actif");
         }
+        if (active && "true".equalsIgnoreCase(System.getProperty("potatomc.memory.nibble.enabled"))) {
+            nibbleActive = true;
+            PotatoMC.LOGGER.warn("[PotatoMC] NibbleArrayInterner: ENABLED (opt-in, experimental, may break light data)");
+        }
         evaluated = true;
     }
 
     public static boolean isActive() { return active; }
+    public static boolean isNibbleActive() { return active && nibbleActive; }
 }

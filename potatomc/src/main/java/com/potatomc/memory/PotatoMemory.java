@@ -13,7 +13,8 @@ public final class PotatoMemory {
     public static void init() {
         MemoryGuard.evaluate();
         if (MemoryGuard.isActive()) {
-            PotatoMC.LOGGER.info("[PotatoMC] Memory module — PropertyMapInterner armed");
+            String nibble = MemoryGuard.isNibbleActive() ? " + NibbleArrayInterner" : "";
+            PotatoMC.LOGGER.info("[PotatoMC] Memory module — PropertyMapInterner + NbtKeyInterner{} armed", nibble);
         }
     }
 }

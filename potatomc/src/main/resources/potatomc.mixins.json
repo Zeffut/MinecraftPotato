@@ -7,6 +7,8 @@
     "ChunkLightProviderMixin",
     "LightingProviderMixin",
     "memory.StateMixin",
+    "memory.ChunkNibbleArrayMixin",
+    "memory.NbtCompoundMixin",
     "entity.MobEntityMixin"
   ],
   "injectors": {
