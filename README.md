@@ -113,26 +113,29 @@ Nouveau workload `chunk_load_cold` : place un glowstone dans une **section jamai
 | `full_chunk_relight`    | 50    | 561          | 93 926        | 0.006×  |
 | `bulk_writes_no_read`   | 100   | 638          | 3 580         | 0.178×  |
 
-### Memory bench vs FerriteCore — v0.2-wip (2026-05-11, seed=42)
+### Memory bench vs FerriteCore — v0.2-wip (2026-05-11, seed=42, 6-config isolated)
 
-Premier head-to-head contre un concurrent réel : **FerriteCore 8.2.0-fabric** (mod canonique de dédup mémoire pour 1.21.11, project Modrinth `uXXizFIs`). Notre `PropertyMapInterner` fait le même type de travail. Méthodo : `scripts/test-memory.sh` boote le serveur dev 4 fois consécutives, exécute `forceload add -112 -112 112 112` (225 chunks, ~15×15), attend 10s, force deux `System.gc()` consécutifs, puis lit `/memory`. Kill-switch `-Dpotatomc.disabled=true` ajouté à `CompatGuard.evaluate()` pour les runs où le moteur PotatoMC doit être désactivé tout en gardant le harness actif.
+Head-to-head contre **FerriteCore 8.2.0-fabric** (mod canonique de dédup mémoire pour 1.21.11). Kill-switches per-module : `-Dpotatomc.lighting.disabled=true`, `-Dpotatomc.memory.disabled=true`, et l'alias `-Dpotatomc.disabled=true`. Méthodo : `scripts/test-memory.sh` boote le serveur dev 6 fois consécutives sur un **world frais** à chaque run (`run/world/` supprimé), exécute `forceload add -8 -8 8 8` (289 chunks, ~17×17), attend 10s, force deux `System.gc()`, puis lit `/memory` + `/stats`.
 
-| Config              | heap_used_mb | heap_total_mb | GC collections | GC time_ms |
-|---------------------|--------------|---------------|----------------|------------|
-| vanilla             | 232          | 560           | 32             | 223        |
-| ferritecore         | 224          | 760           | 42             | 370        |
-| potato              | 501          | 560           | 36             | 231        |
-| potato+ferritecore  | 508          | 896           | 42             | 405        |
+| Config              | lighting | memory | heap_used_mb | heap_total_mb | GC collections | GC time_ms |
+|---------------------|----------|--------|--------------|---------------|----------------|------------|
+| vanilla             | off      | off    | 220          | 492           | 41             | 659        |
+| ferritecore         | off      | off    | 214          | 600           | 50             | 833        |
+| memory-only         | off      | on     | 239          | 572           | 45             | 614        |
+| lighting-only       | on       | off    | 229          | 564           | 41             | 527        |
+| potato              | on       | on     | 230          | 568           | 38             | 550        |
+| potato+ferritecore  | on       | on     | 225          | 788           | 40             | 972        |
 
 **Lecture honnête** :
-- FerriteCore gagne ~8 MB sur vanilla (3.4%). Modeste mais réel.
-- **PotatoMC consomme 269 MB DE PLUS que vanilla.** Le moteur `PotatoLightEngine` alloue des `PackedLightStorage` (4-bit packed, 2048 bytes/section) en parallèle des chunks ; pour 225 chunks × ~24 sections × 2 KB ≈ 11 MB de packed light. Le reste vient des heightmaps, des structures BFS et de la duplication vanilla/potato live. **Le `PropertyMapInterner` ne suffit pas à compenser le coût mémoire du dual-engine.**
-- Combiner les deux mods n'apporte rien : potato+ferritecore ≈ potato. FerriteCore et `PropertyMapInterner` ciblent probablement le même set de maps (BlockState property maps), donc redondance.
+- **Le +269 MB précédent était un artefact de mesure.** Une instance `runServer` zombie de la précédente itération restait bound sur le port, le nouveau process échouait à init le MC server mais le harness HTTP du zombie répondait toujours — donc on lisait la mémoire du serveur fantôme + un nouveau process partiellement chargé. `cleanup()` tue maintenant `KnotServer`/`runServer` explicitement (pkill -9) entre chaque config, et `reset_world` supprime `run/world/`.
+- Sur 289 chunks fresh-gen, **lighting-only ≈ vanilla** (229 vs 220 MB, +9 MB). Coût du `PotatoLightEngine` réel : ~9 MB sur ce volume — proche de la limite théorique des `PackedLightStorage` (~14 MB pour ~7k sections × 2 KB).
+- **memory-only > vanilla (+19 MB)** : `PropertyMapInterner` ajoute un cache global de maps internées qui, à 6k+ entrées, pèse net malgré les hits. Sur ce volume, le module memory est un **coût net**, pas un gain.
+- `ferritecore` (-6 MB vs vanilla) reste légèrement plus efficace que notre interner. `potato+ferritecore` (225 MB) est dans le bruit de `potato` (230 MB).
 
 **Conclusions actionnables** :
-1. Le bench mémoire actuel mesure la **somme dual-engine**, pas le delta mémoire du module memory seul. Pour isoler `PropertyMapInterner`, il faudrait pouvoir désactiver le lighting engine sans désactiver memory.
-2. Le moteur lighting custom est aujourd'hui un coût mémoire net (~+270 MB) sans gain perf (cf. benchmarks vanilla>>potato plus bas). Le module memory est viable mais marginal.
-3. Aucun conflit log/crash observé entre FerriteCore et nos mixins memory — les deux coexistent.
+1. Aucun module n'est un disaster mémoire — la régression précédente n'existait pas. Les coûts réels sont modestes (~+9 MB lighting, ~+19 MB memory).
+2. `PropertyMapInterner` reste douteux face à FerriteCore qui fait mieux pour moins cher. À reconsidérer.
+3. Le moteur lighting est OK en mémoire ; le vrai problème est la perf (benchmarks plus bas).
 
 Aucune perte de fonctionnalité : 48 tests unitaires verts, e2e harness OK.
 

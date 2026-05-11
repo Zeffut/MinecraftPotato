@@ -25,6 +25,7 @@ public abstract class StateMixin {
     @ModifyVariable(method = "<init>", at = @At("HEAD"), argsOnly = true, require = 0)
     private static Reference2ObjectArrayMap<Property<?>, Comparable<?>> potatomc$internProperties(
             Reference2ObjectArrayMap<Property<?>, Comparable<?>> input) {
+        if (!com.potatomc.memory.MemoryGuard.isActive()) return input;
         return PropertyMapInterner.internRefMap(input);
     }
 }

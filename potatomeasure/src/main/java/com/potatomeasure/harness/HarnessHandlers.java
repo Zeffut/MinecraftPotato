@@ -233,6 +233,8 @@ public final class HarnessHandlers {
         }
         Map<String, Object> b = new LinkedHashMap<>();
         b.put("engine_active", com.potatomeasure.PotatoMCBridge.engineActive());
+        b.put("lighting_active", com.potatomeasure.PotatoMCBridge.engineActive());
+        b.put("memory_active", com.potatomeasure.PotatoMCBridge.memoryActive());
         b.put("sections_tracked", com.potatomeasure.PotatoMCBridge.trackedSections());
         b.put("server_ready", ServerHolder.isReady());
         b.put("potatomc_present", com.potatomeasure.PotatoMCBridge.isPresent());

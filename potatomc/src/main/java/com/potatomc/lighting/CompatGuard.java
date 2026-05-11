@@ -13,9 +13,10 @@ public final class CompatGuard {
 
     public static void evaluate() {
         if (evaluated) return;
-        if ("true".equalsIgnoreCase(System.getProperty("potatomc.disabled"))) {
+        if ("true".equalsIgnoreCase(System.getProperty("potatomc.disabled"))
+                || "true".equalsIgnoreCase(System.getProperty("potatomc.lighting.disabled"))) {
             active = false;
-            PotatoMC.LOGGER.warn("[PotatoMC] kill-switch -Dpotatomc.disabled=true — engine OFF");
+            PotatoMC.LOGGER.warn("[PotatoMC] lighting module disabled via kill-switch");
             evaluated = true;
             return;
         }

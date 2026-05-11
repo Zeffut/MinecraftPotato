@@ -11,6 +11,9 @@ public final class PotatoMemory {
     private PotatoMemory() {}
 
     public static void init() {
-        PotatoMC.LOGGER.info("[PotatoMC] Memory module — PropertyMapInterner armed");
+        MemoryGuard.evaluate();
+        if (MemoryGuard.isActive()) {
+            PotatoMC.LOGGER.info("[PotatoMC] Memory module — PropertyMapInterner armed");
+        }
     }
 }

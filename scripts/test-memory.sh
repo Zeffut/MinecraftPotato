@@ -21,6 +21,10 @@ fi
 cleanup() {
     "$PMH" stop >/dev/null 2>&1 || true
     rm -f "$ROOT/run/mods/ferritecore-8.2.0-fabric.jar" 2>/dev/null || true
+    # Kill any zombie gradle/java processes still holding the harness/MC port.
+    pkill -9 -f "KnotServer" >/dev/null 2>&1 || true
+    pkill -9 -f "runServer" >/dev/null 2>&1 || true
+    sleep 1
 }
 trap cleanup EXIT
 
@@ -28,41 +32,56 @@ mkdir -p "$ROOT/run/mods"
 
 declare -a RESULTS
 
+# Fresh-world reset: deletes run/world entirely so every config starts from
+# the same vanilla generation. Reliable cleanup — wipes session lock too.
+reset_world() {
+    rm -rf "$ROOT/run/world" 2>/dev/null || true
+    rm -f "$ROOT/.pmh/server.pid" "$ROOT/.pmh/server.log" 2>/dev/null || true
+}
+
 run_config() {
     local label="$1"
     local with_ferrite="$2"
-    local potato_disabled="$3"
+    local vm_args="$3"
 
     echo ""
-    echo "=== Config: $label (ferrite=$with_ferrite, potato_disabled=$potato_disabled) ==="
+    echo "=== Config: $label (ferrite=$with_ferrite, vm_args='$vm_args') ==="
     cleanup
-    rm -f "$ROOT/.pmh/server.pid" "$ROOT/.pmh/server.log"
-    rm -f "$ROOT/run/world/session.lock" 2>/dev/null || true
+    reset_world
 
     if [ "$with_ferrite" = "yes" ]; then
         cp "$FERRITE" "$ROOT/run/mods/"
     fi
 
-    if [ "$potato_disabled" = "yes" ]; then
-        export PMH_EXTRA_VM_ARGS='-Dpotatomc.disabled=true'
+    if [ -n "$vm_args" ]; then
+        export PMH_EXTRA_VM_ARGS="$vm_args"
     else
         unset PMH_EXTRA_VM_ARGS || true
     fi
 
     "$PMH" start >/dev/null
 
-    # forceload limit is 256 chunks. Use a 15x15 region = 225 chunks.
-    "$PMH" cmd 'forceload add -112 -112 112 112' >/dev/null || true
+    # Smaller region than before for faster iteration: 17x17 = 289 chunks.
+    # Still ~6900 sections — plenty of memory pressure to see the lighting delta.
+    "$PMH" cmd 'forceload add -8 -8 8 8' >/dev/null || true
     sleep 10
 
     "$PMH" gc >/dev/null
     sleep 1
+    "$PMH" gc >/dev/null
+    sleep 1
 
-    local mem
+    local mem stats
     mem=$("$PMH" memory)
+    stats=$("$PMH" stats)
+    local lighting_active memory_active
+    lighting_active=$(echo "$stats" | jq -r '.lighting_active // .engine_active // false')
+    memory_active=$(echo "$stats" | jq -r '.memory_active // false')
+
     local line
     line=$(echo "$mem" | jq -c --arg label "$label" \
-        '{label: $label, heap_used_mb: .heap_used_mb, heap_total_mb: .heap_total_mb, gc_collections: ([.gc[].collections] | add), gc_time_ms: ([.gc[].time_ms] | add)}')
+        --argjson la "$lighting_active" --argjson ma "$memory_active" \
+        '{label: $label, lighting: $la, memory: $ma, heap_used_mb: .heap_used_mb, heap_total_mb: .heap_total_mb, gc_collections: ([.gc[].collections] | add), gc_time_ms: ([.gc[].time_ms] | add)}')
     echo "RESULT: $line"
     RESULTS+=("$line")
 
@@ -70,10 +89,13 @@ run_config() {
     sleep 2
 }
 
-run_config "vanilla"             "no"  "yes"
-run_config "ferritecore"         "yes" "yes"
-run_config "potato"              "no"  "no"
-run_config "potato+ferritecore"  "yes" "no"
+# 6-config matrix
+run_config "vanilla"             "no"  "-Dpotatomc.disabled=true"
+run_config "ferritecore"         "yes" "-Dpotatomc.disabled=true"
+run_config "memory-only"         "no"  "-Dpotatomc.lighting.disabled=true"
+run_config "lighting-only"       "no"  "-Dpotatomc.memory.disabled=true"
+run_config "potato"              "no"  ""
+run_config "potato+ferritecore"  "yes" ""
 
 echo ""
 echo "=== SUMMARY ==="

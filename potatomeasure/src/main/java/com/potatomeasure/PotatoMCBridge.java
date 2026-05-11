@@ -31,6 +31,7 @@ public final class PotatoMCBridge {
     private static volatile Method differentialRunAround;
     private static volatile Method engineTrackedSections;
     private static volatile Method compatIsActive;
+    private static volatile Method memoryIsActive;
 
     private PotatoMCBridge() {}
 
@@ -57,6 +58,13 @@ public final class PotatoMCBridge {
 
             Class<?> compatGuard = Class.forName("com.potatomc.lighting.CompatGuard");
             compatIsActive = compatGuard.getMethod("isActive");
+
+            try {
+                Class<?> memoryGuard = Class.forName("com.potatomc.memory.MemoryGuard");
+                memoryIsActive = memoryGuard.getMethod("isActive");
+            } catch (Throwable ignored) {
+                memoryIsActive = null;
+            }
 
             Class<?> diffValidator = Class.forName("com.potatomc.debug.DifferentialValidator");
             differentialRunAround = diffValidator.getMethod(
@@ -102,6 +110,12 @@ public final class PotatoMCBridge {
     public static boolean engineActive() {
         if (!isPresent()) return false;
         try { return (boolean) compatIsActive.invoke(null); }
+        catch (Throwable t) { return false; }
+    }
+
+    public static boolean memoryActive() {
+        if (!isPresent() || memoryIsActive == null) return false;
+        try { return (boolean) memoryIsActive.invoke(null); }
         catch (Throwable t) { return false; }
     }
 
