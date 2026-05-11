@@ -18,6 +18,9 @@ public final class PotatoMC implements ModInitializer {
     public void onInitialize() {
         LOGGER.info("[PotatoMC] Initialisation — optimisation extrême activée");
         CompatGuard.evaluate();
+        if (CompatGuard.isActive()) {
+            com.potatomc.lighting.bridge.EngineHolder.set(LIGHT_ENGINE);
+        }
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             ServerHolder.set(server);
             HarnessServer.startIfEnabled();
