@@ -82,7 +82,8 @@ loom {
             server()
             ideConfigGenerated true
             runDir = '../run'
-            vmArgs '-Dpotatomc.dev=true'
+            def extraVmArgs = (System.getenv('PMH_EXTRA_VM_ARGS') ?: '').split(' ').findAll { !it.isEmpty() }
+            vmArgs(['-Dpotatomc.dev=true'] + extraVmArgs)
         }
         serverLimited {
             server()

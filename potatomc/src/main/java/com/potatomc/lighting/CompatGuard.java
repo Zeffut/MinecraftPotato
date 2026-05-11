@@ -13,6 +13,12 @@ public final class CompatGuard {
 
     public static void evaluate() {
         if (evaluated) return;
+        if ("true".equalsIgnoreCase(System.getProperty("potatomc.disabled"))) {
+            active = false;
+            PotatoMC.LOGGER.warn("[PotatoMC] kill-switch -Dpotatomc.disabled=true — engine OFF");
+            evaluated = true;
+            return;
+        }
         FabricLoader fl = FabricLoader.getInstance();
         for (String id : CONFLICTING_MODS) {
             if (fl.isModLoaded(id)) {

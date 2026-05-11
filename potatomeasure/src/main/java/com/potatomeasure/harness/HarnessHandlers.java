@@ -24,6 +24,49 @@ public final class HarnessHandlers {
         bind.accept("/validate", HarnessHandlers::handleValidate);
         bind.accept("/shutdown", HarnessHandlers::handleShutdown);
         bind.accept("/bench/micro", HarnessHandlers::handleBenchMicro);
+        bind.accept("/memory", HarnessHandlers::handleMemory);
+        bind.accept("/gc", HarnessHandlers::handleGc);
+    }
+
+    private static void handleMemory(HttpExchange ex) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"GET required\"}");
+            return;
+        }
+        Runtime rt = Runtime.getRuntime();
+        long total = rt.totalMemory();
+        long free = rt.freeMemory();
+        long used = total - free;
+        long max = rt.maxMemory();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("heap_used_bytes", used);
+        body.put("heap_total_bytes", total);
+        body.put("heap_max_bytes", max);
+        body.put("heap_used_mb", used / 1024 / 1024);
+        body.put("heap_total_mb", total / 1024 / 1024);
+        body.put("heap_max_mb", max / 1024 / 1024);
+
+        java.util.List<Map<String, Object>> gcs = new java.util.ArrayList<>();
+        for (java.lang.management.GarbageCollectorMXBean gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+            Map<String, Object> g = new LinkedHashMap<>();
+            g.put("name", gc.getName());
+            g.put("collections", gc.getCollectionCount());
+            g.put("time_ms", gc.getCollectionTime());
+            gcs.add(g);
+        }
+        body.put("gc", gcs);
+        HarnessServer.respond(ex, 200, Json.write(body));
+    }
+
+    private static void handleGc(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"POST required\"}");
+            return;
+        }
+        System.gc();
+        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        System.gc();
+        HarnessServer.respond(ex, 200, "{\"gc\":\"done\"}");
     }
 
     private static void handleBenchMicro(HttpExchange ex) throws IOException {
