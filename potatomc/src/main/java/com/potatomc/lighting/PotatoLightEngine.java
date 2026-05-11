@@ -33,6 +33,33 @@ public final class PotatoLightEngine implements LightLevelAPI {
     private final AtomicBoolean flushing = new AtomicBoolean();
     private volatile ServerWorld pendingWorld;
 
+    // Cached access lambdas — avoid per-flush allocation
+    private volatile BlockLightAccess cachedBlockAccess;
+    private volatile SkyLightAccess cachedSkyAccess;
+    private volatile ServerWorld cachedAccessWorld;
+
+    // Per-flush opacity cache (shared across block + sky paths since opacity
+    // is light-type independent). Cleared at the start of each flushPending.
+    private final OpacityCache opacityCache = new OpacityCache();
+
+    private static final class OpacityCache {
+        private final java.util.HashMap<Long, Boolean> map = new java.util.HashMap<>();
+        private final BlockPos.Mutable scratch = new BlockPos.Mutable();
+        boolean isOpaque(ServerWorld w, int x, int y, int z) {
+            long key = pack(x, y, z);
+            Boolean cached = map.get(key);
+            if (cached != null) return cached;
+            scratch.set(x, y, z);
+            boolean v = w.getBlockState(scratch).isOpaqueFullCube();
+            map.put(key, v);
+            return v;
+        }
+        void clear() { map.clear(); }
+        private static long pack(int x, int y, int z) {
+            return ((long)(x & 0xFFFFFF) << 40) | ((long)(y & 0xFFF) << 28) | ((long)(z & 0xFFFFFF));
+        }
+    }
+
     public SectionLightData getOrCreate(SectionKey key) {
         return sections.computeIfAbsent(key, k -> new SectionLightData());
     }
@@ -55,33 +82,40 @@ public final class PotatoLightEngine implements LightLevelAPI {
      * and reads/writes block-light through this engine's section storage.
      */
     public WorldBFSWorker.SectionAccess blockLightAccess(ServerWorld world) {
-        return new WorldBFSWorker.SectionAccess() {
-            private final BlockPos.Mutable scratch = new BlockPos.Mutable();
+        if (cachedAccessWorld != world) {
+            cachedAccessWorld = world;
+            cachedBlockAccess = new BlockLightAccess(world);
+            cachedSkyAccess = new SkyLightAccess(world);
+        }
+        return cachedBlockAccess;
+    }
 
-            @Override
-            public boolean isOpaque(int x, int y, int z) {
-                scratch.set(x, y, z);
-                return world.getBlockState(scratch).isOpaqueFullCube();
-            }
+    private final class BlockLightAccess implements WorldBFSWorker.SectionAccess {
+        private final ServerWorld world;
+        BlockLightAccess(ServerWorld w) { this.world = w; }
 
-            @Override
-            public int getLight(int x, int y, int z) {
-                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
-                SectionLightData d = sections.get(k);
-                if (d == null) return 0;
-                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
-                return d.block.get(idx);
-            }
+        @Override
+        public boolean isOpaque(int x, int y, int z) {
+            return opacityCache.isOpaque(world, x, y, z);
+        }
 
-            @Override
-            public void setLight(int x, int y, int z, int level) {
-                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
-                SectionLightData d = getOrCreate(k);
-                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
-                d.block.set(idx, level);
-                dirty.add(k);
-            }
-        };
+        @Override
+        public int getLight(int x, int y, int z) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = sections.get(k);
+            if (d == null) return 0;
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            return d.block.get(idx);
+        }
+
+        @Override
+        public void setLight(int x, int y, int z, int level) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.block.set(idx, level);
+            dirty.add(k);
+        }
     }
 
     /**
@@ -90,33 +124,40 @@ public final class PotatoLightEngine implements LightLevelAPI {
      * sky-light column rebuild + horizontal BFS.
      */
     public WorldBFSWorker.SectionAccess skyLightAccess(ServerWorld world) {
-        return new WorldBFSWorker.SectionAccess() {
-            private final BlockPos.Mutable scratch = new BlockPos.Mutable();
+        if (cachedAccessWorld != world) {
+            cachedAccessWorld = world;
+            cachedBlockAccess = new BlockLightAccess(world);
+            cachedSkyAccess = new SkyLightAccess(world);
+        }
+        return cachedSkyAccess;
+    }
 
-            @Override
-            public boolean isOpaque(int x, int y, int z) {
-                scratch.set(x, y, z);
-                return world.getBlockState(scratch).isOpaqueFullCube();
-            }
+    private final class SkyLightAccess implements WorldBFSWorker.SectionAccess {
+        private final ServerWorld world;
+        SkyLightAccess(ServerWorld w) { this.world = w; }
 
-            @Override
-            public int getLight(int x, int y, int z) {
-                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
-                SectionLightData d = sections.get(k);
-                if (d == null) return 0;
-                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
-                return d.sky.get(idx);
-            }
+        @Override
+        public boolean isOpaque(int x, int y, int z) {
+            return opacityCache.isOpaque(world, x, y, z);
+        }
 
-            @Override
-            public void setLight(int x, int y, int z, int level) {
-                SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
-                SectionLightData d = getOrCreate(k);
-                int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
-                d.sky.set(idx, level);
-                dirty.add(k);
-            }
-        };
+        @Override
+        public int getLight(int x, int y, int z) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = sections.get(k);
+            if (d == null) return 0;
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            return d.sky.get(idx);
+        }
+
+        @Override
+        public void setLight(int x, int y, int z, int level) {
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            int idx = MortonIndex.encode(x & 15, y & 15, z & 15);
+            d.sky.set(idx, level);
+            dirty.add(k);
+        }
     }
 
     /**
@@ -145,6 +186,7 @@ public final class PotatoLightEngine implements LightLevelAPI {
             ServerWorld world = pendingWorld;
             if (world == null) { pending.clear(); return; }
 
+            opacityCache.clear();
             WorldBFSWorker w = worldWorkers.get();
             WorldBFSWorker.SectionAccess access = blockLightAccess(world);
 

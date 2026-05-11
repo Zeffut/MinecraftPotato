@@ -28,9 +28,11 @@ Mesures via `scripts/pmh bench <workload>` (deux runs dos-à-dos, notre moteur p
 
 | Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup |
 |-----------------------|-------|--------------|---------------|---------|
-| `single_block_update` | 200   | 14 839       | 42 293        | 0.35×   |
-| `bulk_random_updates` | 100   | 4 686        | 118 354       | 0.04×   |
-| `full_chunk_relight`  | 50    | 645          | 85 561        | 0.008×  |
+| `single_block_update` | 200   | 12 981       | 64 079        | 0.20×   |
+| `bulk_random_updates` | 100   | 4 283        | 240 963       | 0.018×  |
+| `full_chunk_relight`  | 50    | 439          | 84 293        | 0.005×  |
+
+> Post-optim (cached opacity + non-alloc access lambdas). Baseline pré-optim était `single_block_update` 14 839 / `bulk_random_updates` 4 686 / `full_chunk_relight` 645. Les chiffres Potato sont dans le bruit du baseline ; vanilla est plus rapide sur ce run (charge machine variable). **Conclusion honnête : les deux bottlenecks ciblés n'étaient pas le chemin chaud dominant** — le flush-on-read force toujours un BFS sync par itération de bench, ce qui domine tout le reste.
 
 **Lecture honnête** : on est encore loin derrière vanilla. Le batching différé est en place côté écriture (`onBlockChanged` queue les changements, le BFS est flushé sur tick ou avant un read), mais le bench lit la lumière après *chaque* placement, ce qui force un flush sync à chaque itération et annule le bénéfice du batching. Les vrais gains viendront quand on :
 
