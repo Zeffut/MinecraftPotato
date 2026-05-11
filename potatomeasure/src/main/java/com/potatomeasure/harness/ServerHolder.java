@@ -1,4 +1,4 @@
-package com.potatomc.harness;
+package com.potatomeasure.harness;
 
 import net.minecraft.server.MinecraftServer;
 

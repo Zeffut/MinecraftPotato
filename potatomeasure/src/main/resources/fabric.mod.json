@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "potatomeasure",
+  "version": "${version}",
+  "name": "PotatoMeasure",
+  "description": "HTTP control plane + microbench harness for PotatoMC (dev/CI only).",
+  "authors": ["tom77ds"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.potatomeasure.PotatoMeasure"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  },
+  "suggests": {
+    "potatomc": "*"
+  }
+}

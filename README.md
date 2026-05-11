@@ -100,13 +100,21 @@ Chaque module suit trois exigences :
 
 ## Build & dev
 
+Le repo est un **monorepo Gradle** produisant deux jars Fabric :
+
+- `potatomc/build/libs/potatomc-0.1.0.jar` — mod prod (engine + commandes + mixins, ~35 KB)
+- `potatomeasure/build/libs/potatomeasure-0.1.0.jar` — outil dev/CI (HTTP harness + microbench)
+
+`potatomeasure` ne compile **aucun** import `com.potatomc.*` : il accède au moteur via réflexion (`PotatoMCBridge`) ce qui lui permet de bencher aussi vanilla / Starlight / Lithium sans PotatoMC installé.
+
 ```bash
-./gradlew build           # compile + tests
-./gradlew test            # uniquement les tests JUnit
-./gradlew runServer       # serveur dev headless (avec harness)
-./gradlew runClient       # client dev (avec harness)
-scripts/test-pmh.sh       # smoke test harness
-scripts/test-engine.sh    # validation engine vs vanilla
+./gradlew build              # compile les deux jars + tests
+./gradlew test               # uniquement les tests JUnit (45 tests)
+./gradlew :potatomc:runServer  # serveur dev headless (charge potatomc + potatomeasure)
+./gradlew :potatomc:runClient  # client dev
+scripts/test-pmh.sh          # smoke test harness
+scripts/test-engine.sh       # validation engine vs vanilla
+scripts/test-bench.sh        # microbench fumée
 ```
 
 ## Specs & plans

@@ -5,4 +5,5 @@ pluginManagement {
     }
 }
 
-rootProject.name = 'potatomc'
+rootProject.name = 'potatomc-monorepo'
+include 'potatomc', 'potatomeasure'

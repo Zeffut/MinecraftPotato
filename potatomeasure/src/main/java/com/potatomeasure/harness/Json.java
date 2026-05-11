@@ -1,4 +1,4 @@
-package com.potatomc.harness;
+package com.potatomeasure.harness;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

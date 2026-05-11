@@ -1,6 +1,6 @@
-package com.potatomc.harness;
+package com.potatomeasure.harness;
 
-import com.potatomc.PotatoMC;
+import com.potatomeasure.PotatoMeasure;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -22,7 +22,7 @@ public final class HarnessServer {
 
     public static void startIfEnabled() {
         if (!"true".equals(System.getProperty("potatomc.dev"))) {
-            PotatoMC.LOGGER.info("[harness] dev flag absent — HTTP harness disabled");
+            PotatoMeasure.LOGGER.info("[harness] dev flag absent — HTTP harness disabled");
             return;
         }
         if (http != null) return;
@@ -37,9 +37,9 @@ public final class HarnessServer {
             register("/health", HarnessServer::handleHealth);
             HarnessHandlers.bindAll(HarnessServer::register);
             http.start();
-            PotatoMC.LOGGER.info("[harness] listening on 127.0.0.1:{}", port);
+            PotatoMeasure.LOGGER.info("[harness] listening on 127.0.0.1:{}", port);
         } catch (IOException e) {
-            PotatoMC.LOGGER.error("[harness] failed to start", e);
+            PotatoMeasure.LOGGER.error("[harness] failed to start", e);
         }
     }
 
@@ -47,7 +47,7 @@ public final class HarnessServer {
         if (http != null) {
             http.stop(0);
             http = null;
-            PotatoMC.LOGGER.info("[harness] stopped");
+            PotatoMeasure.LOGGER.info("[harness] stopped");
         }
     }
 
@@ -60,7 +60,7 @@ public final class HarnessServer {
             try {
                 inner.handle(exchange);
             } catch (Exception e) {
-                PotatoMC.LOGGER.error("[harness] handler error on " + exchange.getRequestURI(), e);
+                PotatoMeasure.LOGGER.error("[harness] handler error on " + exchange.getRequestURI(), e);
                 Map<String, Object> err = new LinkedHashMap<>();
                 err.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                 respond(exchange, 500, Json.write(err));

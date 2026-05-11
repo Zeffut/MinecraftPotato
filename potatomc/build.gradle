@@ -1,0 +1,88 @@
+plugins {
+    id 'fabric-loom' version '1.16.1'
+    id 'maven-publish'
+    id 'java'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = 'potatomc'
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+    maven { url = 'https://maven.terraformersmc.com/' }
+    maven { url = 'https://api.modrinth.com/maven' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Pull potatomeasure into dev runs (server + client) so the HTTP harness boots alongside.
+    // This is dev-classpath only and is NOT bundled into potatomc.jar.
+    modLocalRuntime project(path: ':potatomeasure', configuration: 'namedElements')
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+    options.compilerArgs.addAll(['-parameters', '-Xlint:all', '-Xlint:-processing'])
+}
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { events 'passed', 'skipped', 'failed' }
+}
+
+jar {
+    from(rootProject.file("LICENSE")) {
+        rename { "${it}_potatomc" }
+    }
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/potatomc.accesswidener")
+    runs {
+        client {
+            client()
+            ideConfigGenerated true
+            runDir = '../run'
+            vmArgs(
+                "-Xmx2G",
+                "-XX:+UnlockExperimentalVMOptions",
+                "-XX:+UseG1GC",
+                "-XX:+UseStringDeduplication",
+                "-Dfabric.debug.disableClassPathIsolation=true",
+                "-Dpotatomc.dev=true"
+            )
+        }
+        server {
+            server()
+            ideConfigGenerated true
+            runDir = '../run'
+            vmArgs '-Dpotatomc.dev=true'
+        }
+    }
+}

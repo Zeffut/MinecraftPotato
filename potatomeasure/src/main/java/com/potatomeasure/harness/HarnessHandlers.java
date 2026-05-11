@@ -1,4 +1,4 @@
-package com.potatomc.harness;
+package com.potatomeasure.harness;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -41,31 +41,31 @@ public final class HarnessHandlers {
         int iterations = req.get("iterations") instanceof Number n ? n.intValue() : 1000;
         long seed = req.get("seed") instanceof Number n ? n.longValue() : 42L;
 
-        com.potatomc.bench.Microbench.Workload wl;
+        com.potatomeasure.bench.Microbench.Workload wl;
         try {
-            wl = com.potatomc.bench.Microbench.Workload.valueOf(workloadName.toUpperCase());
+            wl = com.potatomeasure.bench.Microbench.Workload.valueOf(workloadName.toUpperCase());
         } catch (Exception e) {
             HarnessServer.respond(ex, 400, "{\"error\":\"unknown workload: " + workloadName + "\"}");
             return;
         }
 
         try {
-            final com.potatomc.bench.Microbench.Workload fwl = wl;
+            final com.potatomeasure.bench.Microbench.Workload fwl = wl;
             final int fIters = iterations;
             final long fSeed = seed;
             final String fName = workloadName;
             Map<String, Object> body = ServerHolder.submitAndWait(() -> {
                 ServerWorld world = ServerHolder.get().getOverworld();
-                var rPotato = com.potatomc.bench.Microbench.run(world, fwl,
-                    com.potatomc.bench.Microbench.Engine.POTATO, fIters, fSeed);
-                var rVanilla = com.potatomc.bench.Microbench.run(world, fwl,
-                    com.potatomc.bench.Microbench.Engine.VANILLA, fIters, fSeed);
+                var rPotato = com.potatomeasure.bench.Microbench.run(world, fwl,
+                    com.potatomeasure.bench.Microbench.Engine.POTATO, fIters, fSeed);
+                var rVanilla = com.potatomeasure.bench.Microbench.run(world, fwl,
+                    com.potatomeasure.bench.Microbench.Engine.VANILLA, fIters, fSeed);
                 Map<String, Object> out = new LinkedHashMap<>();
                 out.put("workload", fName);
                 out.put("iterations", fIters);
                 out.put("seed", fSeed);
-                out.put("potato", com.potatomc.bench.Microbench.resultToJson(rPotato));
-                out.put("vanilla", com.potatomc.bench.Microbench.resultToJson(rVanilla));
+                out.put("potato", com.potatomeasure.bench.Microbench.resultToJson(rPotato));
+                out.put("vanilla", com.potatomeasure.bench.Microbench.resultToJson(rVanilla));
                 double speedup = rPotato.totalNanos() > 0
                     ? (double) rVanilla.totalNanos() / (double) rPotato.totalNanos()
                     : 0.0;
@@ -157,14 +157,12 @@ public final class HarnessHandlers {
                 ServerWorld world = server.getOverworld();
                 BlockPos pos = new BlockPos(x, y, z);
                 int[] vanilla = new int[2];
-                com.potatomc.lighting.bridge.EngineHolder.runBypassed(() -> {
+                com.potatomeasure.PotatoMCBridge.runBypassed(() -> {
                     vanilla[0] = world.getLightLevel(LightType.BLOCK, pos);
                     vanilla[1] = world.getLightLevel(LightType.SKY, pos);
                 });
-                int pBlock = com.potatomc.PotatoMC.LIGHT_ENGINE.getLightLevel(
-                    pos, com.potatomc.lighting.api.LightLevelAPI.LightType.BLOCK);
-                int pSky = com.potatomc.PotatoMC.LIGHT_ENGINE.getLightLevel(
-                    pos, com.potatomc.lighting.api.LightLevelAPI.LightType.SKY);
+                int pBlock = com.potatomeasure.PotatoMCBridge.getBlockLight(pos);
+                int pSky = com.potatomeasure.PotatoMCBridge.getSkyLight(pos);
                 int mBlock = world.getLightLevel(LightType.BLOCK, pos);
                 int mSky = world.getLightLevel(LightType.SKY, pos);
                 Map<String, Object> b = new LinkedHashMap<>();
@@ -176,7 +174,7 @@ public final class HarnessHandlers {
                 b.put("mixed_block", mBlock);
                 b.put("mixed_sky", mSky);
                 b.put("match", mBlock == pBlock && mSky == pSky);
-                b.put("engine_active", com.potatomc.lighting.CompatGuard.isActive());
+                b.put("engine_active", com.potatomeasure.PotatoMCBridge.engineActive());
                 return b;
             }, 5000);
             HarnessServer.respond(ex, 200, Json.write(body));
@@ -191,9 +189,10 @@ public final class HarnessHandlers {
             return;
         }
         Map<String, Object> b = new LinkedHashMap<>();
-        b.put("engine_active", com.potatomc.lighting.CompatGuard.isActive());
-        b.put("sections_tracked", com.potatomc.PotatoMC.LIGHT_ENGINE.trackedSectionsCount());
+        b.put("engine_active", com.potatomeasure.PotatoMCBridge.engineActive());
+        b.put("sections_tracked", com.potatomeasure.PotatoMCBridge.trackedSections());
         b.put("server_ready", ServerHolder.isReady());
+        b.put("potatomc_present", com.potatomeasure.PotatoMCBridge.isPresent());
         HarnessServer.respond(ex, 200, Json.write(b));
     }
 
@@ -229,20 +228,25 @@ public final class HarnessHandlers {
         try {
             Map<String, Object> body = ServerHolder.submitAndWait(() -> {
                 ServerWorld world = ServerHolder.get().getOverworld();
-                com.potatomc.debug.DifferentialValidator.Report r =
-                    com.potatomc.debug.DifferentialValidator.runAround(
-                        world, new net.minecraft.util.math.Vec3d(cx, cy, cz), radius);
+                int[] r = com.potatomeasure.PotatoMCBridge.validate(
+                    world, new net.minecraft.util.math.Vec3d(cx, cy, cz), radius);
                 Map<String, Object> b = new LinkedHashMap<>();
                 b.put("center", java.util.List.of(cx, cy, cz));
                 b.put("radius", radius);
-                b.put("total_blocks", r.totalBlocks());
-                b.put("diff_count", r.diffCount());
-                b.put("max_delta", r.maxDelta());
-                b.put("block_diffs", r.blockDiffs());
-                b.put("block_max_delta", r.blockMaxDelta());
-                b.put("sky_diffs", r.skyDiffs());
-                b.put("sky_max_delta", r.skyMaxDelta());
-                b.put("pass", r.maxDelta() <= 1);
+                if (r == null) {
+                    b.put("error", "potatomc not present — validator unavailable");
+                    b.put("pass", false);
+                    return b;
+                }
+                // r = [totalBlocks, diffCount, maxDelta, blockDiffs, blockMaxDelta, skyDiffs, skyMaxDelta]
+                b.put("total_blocks", r[0]);
+                b.put("diff_count", r[1]);
+                b.put("max_delta", r[2]);
+                b.put("block_diffs", r[3]);
+                b.put("block_max_delta", r[4]);
+                b.put("sky_diffs", r[5]);
+                b.put("sky_max_delta", r[6]);
+                b.put("pass", r[2] <= 1);
                 return b;
             }, 60000);
             HarnessServer.respond(ex, 200, Json.write(body));

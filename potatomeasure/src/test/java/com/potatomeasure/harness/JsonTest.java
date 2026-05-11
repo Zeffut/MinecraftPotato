@@ -1,4 +1,4 @@
-package com.potatomc.harness;
+package com.potatomeasure.harness;
 
 import org.junit.jupiter.api.Test;
 import java.util.LinkedHashMap;

@@ -1,6 +1,6 @@
-package com.potatomc.bench;
+package com.potatomeasure.bench;
 
-import com.potatomc.lighting.bridge.EngineHolder;
+import com.potatomeasure.PotatoMCBridge;
 import net.minecraft.block.Blocks;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
@@ -62,7 +62,7 @@ public final class Microbench {
                 case FULL_CHUNK_RELIGHT -> fullChunkRelight(world, rng);
             }
         };
-        if (engine == Engine.VANILLA) EngineHolder.runBypassed(task);
+        if (engine == Engine.VANILLA) PotatoMCBridge.runBypassed(task);
         else task.run();
     }
 
