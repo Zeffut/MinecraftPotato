@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# PotatoHarness CLI — drives a headless Minecraft dev server.
+# Requires: curl, jq, ./gradlew
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="$ROOT_DIR/.pmh"
+PID_FILE="$STATE_DIR/server.pid"
+LOG_FILE="$STATE_DIR/server.log"
+PORT="${PMH_PORT:-25585}"
+BASE_URL="http://127.0.0.1:$PORT"
+
+mkdir -p "$STATE_DIR"
+
+err() { echo "pmh: $*" >&2; }
+die() { err "$*"; exit 1; }
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || die "required tool '$1' not found"
+}
+require curl
+require jq
+
+cmd_start() {
+  if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    err "server already running (pid $(cat "$PID_FILE"))"
+    return 0
+  fi
+  mkdir -p "$ROOT_DIR/run"
+  echo "eula=true" > "$ROOT_DIR/run/eula.txt"
+
+  err "starting Minecraft dev server (logs: $LOG_FILE)"
+  (cd "$ROOT_DIR" && nohup ./gradlew runServer --no-daemon >"$LOG_FILE" 2>&1 &)
+  local gpid=$!
+  echo "$gpid" > "$PID_FILE"
+
+  err "waiting for /health on $BASE_URL (up to 300s) ..."
+  for _ in $(seq 1 300); do
+    if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
+      err "server ready"
+      curl -fsS "$BASE_URL/health" | jq .
+      return 0
+    fi
+    sleep 1
+  done
+  die "server didn't come up — check $LOG_FILE"
+}
+
+cmd_stop() {
+  if curl -fsS -X POST "$BASE_URL/shutdown" >/dev/null 2>&1; then
+    err "shutdown via HTTP requested"
+  fi
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid=$(cat "$PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      err "killing gradle process $pid"
+      pkill -P "$pid" 2>/dev/null || true
+      kill "$pid" 2>/dev/null || true
+      for _ in 1 2 3 4 5; do
+        kill -0 "$pid" 2>/dev/null || { rm -f "$PID_FILE"; return 0; }
+        sleep 1
+      done
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+}
+
+cmd_health() {
+  curl -fsS "$BASE_URL/health" | jq .
+}
+
+cmd_cmd() {
+  local command="$*"
+  [[ -n "$command" ]] || die "usage: pmh cmd <minecraft command>"
+  local payload
+  payload=$(jq -nc --arg c "$command" '{command:$c}')
+  curl -fsS -X POST -H 'Content-Type: application/json' -d "$payload" "$BASE_URL/cmd" | jq .
+}
+
+cmd_place() {
+  local block="${1:-}"; local x="${2:-}"; local y="${3:-}"; local z="${4:-}"
+  [[ -n "$block" && -n "$x" && -n "$y" && -n "$z" ]] || die "usage: pmh place <block> <x> <y> <z>"
+  cmd_cmd "setblock $x $y $z $block"
+}
+
+cmd_light() {
+  local x="${1:-}"; local y="${2:-}"; local z="${3:-}"
+  [[ -n "$x" && -n "$y" && -n "$z" ]] || die "usage: pmh light <x> <y> <z>"
+  curl -fsS "$BASE_URL/light/$x/$y/$z" | jq .
+}
+
+cmd_logs() {
+  [[ -f "$LOG_FILE" ]] || die "no log file yet"
+  if [[ "${1:-}" == "-f" ]]; then tail -f "$LOG_FILE"; else tail -n 100 "$LOG_FILE"; fi
+}
+
+main() {
+  local sub="${1:-}"
+  shift || true
+  case "$sub" in
+    start)  cmd_start  "$@" ;;
+    stop)   cmd_stop   "$@" ;;
+    health) cmd_health "$@" ;;
+    cmd)    cmd_cmd    "$@" ;;
+    place)  cmd_place  "$@" ;;
+    light)  cmd_light  "$@" ;;
+    logs)   cmd_logs   "$@" ;;
+    ""|-h|--help|help)
+      cat <<'EOF'
+pmh — PotatoHarness CLI
+
+  pmh start                          Start headless Minecraft dev server (auto EULA)
+  pmh stop                           Stop the server
+  pmh health                         Ping /health
+  pmh cmd "<server command>"         Run a /command as server console
+  pmh place <block> <x> <y> <z>      Shortcut for setblock
+  pmh light <x> <y> <z>              Read light at position (vanilla + potato)
+  pmh logs [-f]                      Tail the server log
+
+Env:
+  PMH_PORT  override the HTTP port (default 25585)
+EOF
+      ;;
+    *) die "unknown subcommand: $sub (try pmh help)" ;;
+  esac
+}
+
+main "$@"

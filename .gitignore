@@ -25,3 +25,7 @@ remappedSrc/
 # OS
 .DS_Store
 Thumbs.db
+
+# PotatoHarness runtime state
+.pmh/server.pid
+.pmh/server.log
