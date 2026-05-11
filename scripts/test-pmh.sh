@@ -21,15 +21,21 @@ echo "[test] /cmd"
 RES=$("$PMH" cmd 'say hello-from-test')
 echo "$RES" | jq -e '.success == true' >/dev/null
 
-echo "[test] /light at spawn"
+echo "[test] forceload chunk near spawn so block ops have effect"
+"$PMH" cmd 'forceload add 0 0' >/dev/null
+sleep 1
+
+echo "[test] /light at spawn (Y=100, sky-exposed)"
 LIGHT=$("$PMH" light 0 100 0)
 echo "$LIGHT" | jq -e '.vanilla_sky | numbers' >/dev/null
 echo "$LIGHT" | jq -e '.match == true' >/dev/null
 
-echo "[test] place glowstone + read light"
+echo "[test] place glowstone + read light at neighbor"
+"$PMH" cmd 'setblock 0 100 0 air' >/dev/null
 "$PMH" place glowstone 0 100 0 >/dev/null
 sleep 1
 LIGHT2=$("$PMH" light 1 100 0)
+echo "$LIGHT2" | jq -c '{vanilla_block, vanilla_sky, match}'
 echo "$LIGHT2" | jq -e '.vanilla_block >= 14' >/dev/null
 
 echo "[test] PASS"
