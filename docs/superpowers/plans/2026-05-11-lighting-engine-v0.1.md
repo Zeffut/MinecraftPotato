@@ -1464,7 +1464,10 @@ git commit -m "feat(debug): DifferentialValidator (vs-vanilla bypass + diff repo
 
 ---
 
-### Task 7.3: DebugOverlay (F3 hook, client-only)
+### Task 7.3: DebugOverlay (F3 hook, client-only) — **DEFERRED to v0.2**
+
+> **Status (2026-05-11):** Deferred. Non-testable in headless dev environment, and `recordBfsOp()` counter would pollute the BFS hot path. Revisit when client-side benching is added in v0.2.
+
 
 **Files:**
 - Create: `src/main/java/com/potatomc/debug/DebugOverlay.java`

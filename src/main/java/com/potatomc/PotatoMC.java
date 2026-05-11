@@ -21,6 +21,10 @@ public final class PotatoMC implements ModInitializer {
         if (CompatGuard.isActive()) {
             com.potatomc.lighting.bridge.EngineHolder.set(LIGHT_ENGINE);
         }
+        net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT.register(
+            (dispatcher, registryAccess, env) ->
+                com.potatomc.debug.commands.PotatoMCCommand.register(dispatcher)
+        );
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             ServerHolder.set(server);
             HarnessServer.startIfEnabled();

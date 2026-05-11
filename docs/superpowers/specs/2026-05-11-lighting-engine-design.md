@@ -148,3 +148,9 @@ v0.1 est validé si **toutes** ces conditions sont remplies :
 3. F3 overlay affiche **0 B/s d'allocations** sur le light path en steady state.
 4. Microbench : zéro régression > 5% entre HEAD et le commit précédent.
 5. Le mod se charge sans crash avec Sodium installé en parallèle.
+
+## v0.1 Phase 7 status — 2026-05-11
+
+- DifferentialValidator + /potatomc command implemented and runnable headlessly via harness.
+- F3 overlay (Phase 7.3) deferred to v0.2 — non-testable in headless dev environment, and `recordBfsOp()` counter pollutes the BFS hot path. Will revisit when client-side benching is added.
+- Validate command on a freshly-placed glowstone (radius 1) results: `Validation: 18513 blocs comparés, 0 diffs (max delta 0)` (e2e ran via harness; chunk load via `forceload` had no effect because harness command source has no anchor, but validate itself completed without crash — primary acceptance for this phase).
