@@ -6,7 +6,8 @@
     "WorldChunkMixin",
     "ChunkLightProviderMixin",
     "LightingProviderMixin",
-    "memory.StateMixin"
+    "memory.StateMixin",
+    "entity.MobEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

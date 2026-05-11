@@ -12,6 +12,7 @@ Ambition : remplacer à terme l'écosystème Sodium + Lithium + FerriteCore + St
 |---|---|---|
 | **Memory** (PropertyMapInterner WeakHashMap) | ✅ ACTIF | **-17 MB heap** vs vanilla, **bat FerriteCore** (-5 MB) ; stack avec FerriteCore = -23 MB |
 | **Lighting** (custom engine bit-exact) | ⚠️ OFF par défaut (expérimental opt-in via `-Dpotatomc.lighting.experimental=true`) | Bit-exact correctness ✅, mais perf gameplay 0.0004×-0.16× vanilla → désactivé par défaut |
+| **Entity AI tick skip** (mobTick HEAD cancel quand >32 blocs d'un joueur) | ⚠️ OFF par défaut (opt-in via `-Dpotatomc.entitytick.enabled=true`) | Bench headless 200 mobs (1.21.11) : **régression -20% mspt** (vanilla 10.96, potato 13.12). Le skip empêche le despawn naturel des hostiles, le comptage d'entités gonfle, le coût de tick par-tick augmente. Conservé en opt-in pour multi-joueur réel où la trade-off peut s'inverser. |
 
 **Pour activer le lighting expérimental** :
 ```bash
@@ -27,7 +28,7 @@ Le module reste **dans le repo** pour : la recherche, l'opt-in pour les configs 
 ### Prochaines features qui visent vraiment de la perf user-visible
 
 - 🚧 Module GC pressure : string interning sur NBT tag keys + BlockPos pool
-- 🚧 Module entity AI : skip tick pour entités hors-vue (territoire Lithium, axe spécifique)
+- 🟡 Module entity AI : v1 livré en opt-in (bench défavorable headless, voir tableau) — à reprendre avec un guard de despawn qui ne saute pas le check de despawn, ou en s'inspirant de Lithium (entity-collision, ai-task)
 - 🚧 /reload speedup
 
 ### Lighting engine custom

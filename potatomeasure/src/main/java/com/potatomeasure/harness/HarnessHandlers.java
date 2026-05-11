@@ -27,6 +27,41 @@ public final class HarnessHandlers {
         bind.accept("/bench/realistic", HarnessHandlers::handleBenchRealistic);
         bind.accept("/memory", HarnessHandlers::handleMemory);
         bind.accept("/gc", HarnessHandlers::handleGc);
+        bind.accept("/tps", HarnessHandlers::handleTps);
+    }
+
+    private static void handleTps(HttpExchange ex) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"GET required\"}");
+            return;
+        }
+        if (!ServerHolder.isReady()) {
+            HarnessServer.respond(ex, 503, "{\"error\":\"server not ready\"}");
+            return;
+        }
+        MinecraftServer server = ServerHolder.get();
+        long[] tickTimes = server.getTickTimes();
+        long sum = 0;
+        long maxNs = 0;
+        int count = tickTimes.length;
+        for (long t : tickTimes) {
+            sum += t;
+            if (t > maxNs) maxNs = t;
+        }
+        double meanNs = count > 0 ? (double) sum / count : 0.0;
+        double meanMspt = meanNs / 1_000_000.0;
+        double maxMspt = maxNs / 1_000_000.0;
+        // Cap TPS at 20 (server target); when ticks take >50ms, TPS drops below 20.
+        double tps = meanMspt <= 50.0 ? 20.0 : 1000.0 / meanMspt;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("mean_mspt", meanMspt);
+        body.put("max_mspt", maxMspt);
+        body.put("tps", tps);
+        body.put("samples", count);
+        long[] entityStats = com.potatomeasure.PotatoMCBridge.entityTickStats();
+        body.put("entity_ticks_total", entityStats[0]);
+        body.put("entity_ticks_skipped", entityStats[1]);
+        HarnessServer.respond(ex, 200, Json.write(body));
     }
 
     private static void handleMemory(HttpExchange ex) throws IOException {

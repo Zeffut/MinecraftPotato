@@ -169,6 +169,20 @@ public final class PotatoMCBridge {
         } catch (Throwable t) { return Collections.emptyMap(); }
     }
 
+    /**
+     * Returns [totalTicks, skippedTicks] for the entity AI tick skip module.
+     * [0,0] if PotatoMC absent or module not present.
+     */
+    public static long[] entityTickStats() {
+        if (!isPresent()) return new long[]{0L, 0L};
+        try {
+            Class<?> cls = Class.forName("com.potatomc.entity.PotatoEntityTick");
+            long total = (long) cls.getMethod("getTotalTicks").invoke(null);
+            long skipped = (long) cls.getMethod("getSkippedTicks").invoke(null);
+            return new long[]{total, skipped};
+        } catch (Throwable t) { return new long[]{0L, 0L}; }
+    }
+
     public static int[] validate(Object serverWorld, Object center, int radius) {
         if (!isPresent()) return null;
         try {

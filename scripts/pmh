@@ -134,6 +134,10 @@ cmd_gc() {
   curl -fsS -X POST "$BASE_URL/gc" | jq .
 }
 
+cmd_tps() {
+  curl -fsS "$BASE_URL/tps" | jq .
+}
+
 cmd_logs() {
   [[ -f "$LOG_FILE" ]] || die "no log file yet"
   if [[ "${1:-}" == "-f" ]]; then tail -f "$LOG_FILE"; else tail -n 100 "$LOG_FILE"; fi
@@ -154,6 +158,7 @@ main() {
     bench)  cmd_bench  "$@" ;;
     memory) cmd_memory "$@" ;;
     gc)     cmd_gc     "$@" ;;
+    tps)    cmd_tps    "$@" ;;
     logs)   cmd_logs   "$@" ;;
     ""|-h|--help|help)
       cat <<'EOF'
@@ -170,6 +175,7 @@ pmh — PotatoHarness CLI
   pmh bench <workload> [iters] [seed] Run microbench (single_block_update|bulk_random_updates|full_chunk_relight|bulk_writes_no_read|chunk_load_cold)
   pmh memory                         JVM heap + GC stats
   pmh gc                             Force two System.gc()s (stabilize before /memory)
+  pmh tps                            Server mean MSPT + derived TPS + entity skip stats
   pmh logs [-f]                      Tail the server log
 
 Env:
