@@ -46,6 +46,10 @@ public final class PotatoLightEngine implements LightLevelAPI {
         public final PackedLightStorage block = new PackedLightStorage();
         public final PackedLightStorage sky = new PackedLightStorage();
         public final boolean[] opaque = new boolean[PackedLightStorage.SECTION_SIZE];
+        // True once the opaque[] array has been populated from world.getBlockState
+        // for every cell in this section. After this flips, BFS opacity lookups
+        // are O(1) bitset reads instead of per-cell chunk lookups.
+        public volatile boolean opaquePopulated = false;
         // True once vanilla's light values have been imported into this section.
         // Used by the lazy section-init path to avoid double-imports and to
         // detect sections that were partially populated by column-init only.
@@ -87,10 +91,6 @@ public final class PotatoLightEngine implements LightLevelAPI {
     private volatile SkyLightAccess cachedSkyAccess;
     private volatile ServerWorld cachedAccessWorld;
 
-    // Per-flush opacity cache (shared across block + sky paths since opacity
-    // is light-type independent). Cleared at the start of each flushPending.
-    private final OpacityCache opacityCache = new OpacityCache();
-
     // Worker pool for parallel column recomputes during flushPending().
     // Sized to cores-1 so the server thread (which drives flushes) stays
     // responsive. Daemon threads so we don't pin JVM shutdown.
@@ -106,31 +106,6 @@ public final class PotatoLightEngine implements LightLevelAPI {
                 return t;
             },
             null, false);
-
-    private static final class OpacityCache {
-        // ConcurrentHashMap so parallel column-recompute tasks (on the engine's
-        // ForkJoinPool) can share the cache without external locking. Per-thread
-        // scratch BlockPos avoids the Mutable-aliasing race that the previous
-        // single-instance scratch would cause under parallelism.
-        private final java.util.concurrent.ConcurrentHashMap<Long, Boolean> map =
-            new java.util.concurrent.ConcurrentHashMap<>();
-        private final ThreadLocal<BlockPos.Mutable> scratch =
-            ThreadLocal.withInitial(BlockPos.Mutable::new);
-        boolean isOpaque(ServerWorld w, int x, int y, int z) {
-            long key = pack(x, y, z);
-            Boolean cached = map.get(key);
-            if (cached != null) return cached;
-            BlockPos.Mutable bp = scratch.get();
-            bp.set(x, y, z);
-            boolean v = w.getBlockState(bp).isOpaqueFullCube();
-            map.put(key, v);
-            return v;
-        }
-        void clear() { map.clear(); }
-        private static long pack(int x, int y, int z) {
-            return ((long)(x & 0xFFFFFF) << 40) | ((long)(y & 0xFFF) << 28) | ((long)(z & 0xFFFFFF));
-        }
-    }
 
     public SectionLightData getOrCreate(SectionKey key) {
         return sections.computeIfAbsent(key, k -> new SectionLightData());
@@ -220,7 +195,10 @@ public final class PotatoLightEngine implements LightLevelAPI {
 
         @Override
         public boolean isOpaque(int x, int y, int z) {
-            return opacityCache.isOpaque(world, x, y, z);
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            if (!d.opaquePopulated) ensureOpaquePopulated(world, d, k.sx(), k.sy(), k.sz());
+            return d.opaque[MortonIndex.encode(x & 15, y & 15, z & 15)];
         }
 
         @Override
@@ -262,7 +240,10 @@ public final class PotatoLightEngine implements LightLevelAPI {
 
         @Override
         public boolean isOpaque(int x, int y, int z) {
-            return opacityCache.isOpaque(world, x, y, z);
+            SectionKey k = new SectionKey(x >> 4, y >> 4, z >> 4);
+            SectionLightData d = getOrCreate(k);
+            if (!d.opaquePopulated) ensureOpaquePopulated(world, d, k.sx(), k.sy(), k.sz());
+            return d.opaque[MortonIndex.encode(x & 15, y & 15, z & 15)];
         }
 
         @Override
@@ -293,6 +274,16 @@ public final class PotatoLightEngine implements LightLevelAPI {
     public void onBlockChanged(ServerWorld world, BlockPos pos, int emittedLight) {
         pendingWorld = world;
         pending.add(new PendingChange(pos.getX(), pos.getY(), pos.getZ(), emittedLight));
+
+        // Refresh the single changed cell's opacity in its section. If the
+        // section hasn't been populated yet, leave it — the first BFS visit
+        // will do a full prefetch, which will pick up this block's state.
+        SectionKey sk = keyOf(pos);
+        SectionLightData sd = sections.get(sk);
+        if (sd != null && sd.opaquePopulated) {
+            int oidx = MortonIndex.encode(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+            sd.opaque[oidx] = world.getBlockState(pos).isOpaqueFullCube();
+        }
 
         // Sky-light: detect column heightmap change. Only schedule a recompute
         // when the topmost opaque Y has actually shifted (or column unseen).
@@ -326,7 +317,6 @@ public final class PotatoLightEngine implements LightLevelAPI {
             ServerWorld world = pendingWorld;
             if (world == null) { pending.clear(); pendingSkyColumns.clear(); pendingSkyIncrementals.clear(); return; }
 
-            opacityCache.clear();
             WorldBFSWorker w = worldWorkers.get();
             WorldBFSWorker.SectionAccess access = blockLightAccess(world);
 
@@ -386,7 +376,8 @@ public final class PotatoLightEngine implements LightLevelAPI {
             // Thread-safety contract for parallel recompute:
             //   - PackedLightStorage.set is synchronized → no torn longs when
             //     two threads write distinct cells sharing a long[] slot.
-            //   - OpacityCache uses ConcurrentHashMap + per-thread scratch.
+            //   - Section opaque[] is populated under per-section synchronized
+            //     block; readers wait for the volatile opaquePopulated flag.
             //   - WorldBFSWorker is ThreadLocal → each worker thread gets its
             //     own queue and seeds.
             //   - sections / dirty / columnsImported are concurrent collections.
@@ -504,6 +495,36 @@ public final class PotatoLightEngine implements LightLevelAPI {
             flushStats.flushCount.increment();
         } finally {
             flushing.set(false);
+        }
+    }
+
+    /**
+     * Pre-fetches opacity for every cell in a 16³ section into the section's
+     * opaque[] bitset, once. Subsequent BFS opacity lookups become O(1)
+     * boolean[] reads instead of per-cell world.getBlockState calls.
+     *
+     * <p>Synchronized double-check on the section's opaque[] monitor so that
+     * concurrent BFS workers (parallel sky-column recompute) only populate
+     * once. The {@code opaquePopulated} volatile flag is set last so any
+     * reader that observes {@code true} is guaranteed to also observe the
+     * fully-written array via the happens-before edge.
+     */
+    private void ensureOpaquePopulated(ServerWorld world, SectionLightData d, int sx, int sy, int sz) {
+        if (d.opaquePopulated) return;
+        synchronized (d.opaque) {
+            if (d.opaquePopulated) return;
+            BlockPos.Mutable pos = new BlockPos.Mutable();
+            int x0 = sx << 4, y0 = sy << 4, z0 = sz << 4;
+            for (int lx = 0; lx < 16; lx++) {
+                for (int ly = 0; ly < 16; ly++) {
+                    for (int lz = 0; lz < 16; lz++) {
+                        pos.set(x0 + lx, y0 + ly, z0 + lz);
+                        d.opaque[MortonIndex.encode(lx, ly, lz)] =
+                            world.getBlockState(pos).isOpaqueFullCube();
+                    }
+                }
+            }
+            d.opaquePopulated = true;
         }
     }
 

@@ -42,6 +42,34 @@ Reproduire : `scripts/test-bench-limited.sh` (limited) puis `scripts/test-bench.
 > que le flush-on-read force un BFS sync à chaque itération. Conclusion : la cible ≥5× n'est pas
 > atteinte ; le gap dominant reste algorithmique (flush-on-read, opacité partagée), pas du tuning JVM.
 
+### Benchmark results — v0.2-wip (seed=42, post-section-opacity-prefetch)
+
+Technique Starlight : la première fois qu'un BFS touche une section, on pré-fetch les 4096 cellules `isOpaqueFullCube()` dans `SectionLightData.opaque[]` (boolean[4096]). Les visites suivantes deviennent des lectures `boolean[]` O(1), au lieu de `world.getBlockState(pos).isOpaqueFullCube()` par cellule. L'ancien `OpacityCache` (HashMap global par flush) est retiré. `onBlockChanged` met à jour la cellule modifiée directement dans `opaque[]` si la section est déjà populée.
+
+| Workload                | Iters | Potato ops/s | Vanilla ops/s | Speedup |
+|-------------------------|-------|--------------|---------------|---------|
+| `single_block_update`   | 200   | 2 228        | 99 983        | 0.022×  |
+| `bulk_random_updates`   | 100   | 1 163        | 228 288       | 0.005×  |
+| `bulk_writes_no_read`   | 100   | 387          | 5 022         | 0.077×  |
+| `chunk_load_cold`       | 30    | 757          | 22 889        | 0.033×  |
+
+#### Profil per-phase `flushPending()` — avant vs après prefetch
+
+```json
+// Avant (OpacityCache HashMap par flush)         // Après (section-prefetched boolean[4096])
+{                                                  {
+  "blockSeedNs":         4 027 135,    //  1.4 %     "blockSeedNs":         9 376 800,    //  3.6 %
+  "blockPropagateNs":  195 693 247,    // 67.6 %     "blockPropagateNs":  164 930 044,    // 63.8 %  ← -15.7 %
+  "removalPhaseNs":      4 266 879,    //  1.5 %     "removalPhaseNs":      4 534 131,    //  1.8 %
+  "skyIncrementalNs":   34 219 998,    // 11.8 %     "skyIncrementalNs":   40 047 618,    // 15.5 %
+  "skyFullColumnNs":    48 885 295,    // 16.9 %     "skyFullColumnNs":    46 822 960,    // 18.1 %
+  "flushCount":                254,                  "flushCount":                254,
+  "pendingDrainedTotal":    11 066                   "pendingDrainedTotal":    11 066
+}                                                  }
+```
+
+> **Lecture honnête** : `blockPropagateNs` chute de 196M → 165M ns (-16 %, soit 31 ms cumulés sur 254 flushes). Gain réel mais plus modeste qu'espéré. L'analyse : les workloads bench placent chaque bloc dans une section différente (positions aléatoires), donc le prefetch paye le coût des 4096 reads à chaque première touche puis amortit peu. Sur du gameplay réel (chunks loaded, BFS qui revisite la même section pendant la propagation), l'amortissement sera bien meilleur. `blockSeedNs` augmente (4M → 9M) car la première visite par seed déclenche maintenant le prefetch synchrone. **Net positif** sur le total flush time (~16 ms en moins par seconde de bench cumulée). Validate `diff_count: 0`, `max_delta: 0` préservé.
+
 ### Benchmark results — v0.2-wip (seed=42, post-chunk-load-cold + flush profiling)
 
 Nouveau workload `chunk_load_cold` : place un glowstone dans une **section jamais touchée par notre moteur** (sweep Y∈[64..303] sur les 4 chunks forceload), lit la light, retire le bloc. C'est le chemin _lazy section init_ (`importVanillaSection` = 4096 reads vanilla + écritures packed-storage) plus le BFS block-light et la maj heightmap+sky. Vise à exposer le scénario Starlight (« cold chunk lighting » à l'activation d'un chunk).
