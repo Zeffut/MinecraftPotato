@@ -23,6 +23,59 @@ public final class HarnessHandlers {
         bind.accept("/stats", HarnessHandlers::handleStats);
         bind.accept("/validate", HarnessHandlers::handleValidate);
         bind.accept("/shutdown", HarnessHandlers::handleShutdown);
+        bind.accept("/bench/micro", HarnessHandlers::handleBenchMicro);
+    }
+
+    private static void handleBenchMicro(HttpExchange ex) throws IOException {
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            HarnessServer.respond(ex, 405, "{\"error\":\"POST required\"}");
+            return;
+        }
+        if (!ServerHolder.isReady()) {
+            HarnessServer.respond(ex, 503, "{\"error\":\"server not ready\"}");
+            return;
+        }
+        Map<String, Object> req = Json.parseObject(HarnessServer.readBody(ex));
+        Object wObj = req.get("workload");
+        String workloadName = wObj instanceof String s ? s : "single_block_update";
+        int iterations = req.get("iterations") instanceof Number n ? n.intValue() : 1000;
+        long seed = req.get("seed") instanceof Number n ? n.longValue() : 42L;
+
+        com.potatomc.bench.Microbench.Workload wl;
+        try {
+            wl = com.potatomc.bench.Microbench.Workload.valueOf(workloadName.toUpperCase());
+        } catch (Exception e) {
+            HarnessServer.respond(ex, 400, "{\"error\":\"unknown workload: " + workloadName + "\"}");
+            return;
+        }
+
+        try {
+            final com.potatomc.bench.Microbench.Workload fwl = wl;
+            final int fIters = iterations;
+            final long fSeed = seed;
+            final String fName = workloadName;
+            Map<String, Object> body = ServerHolder.submitAndWait(() -> {
+                ServerWorld world = ServerHolder.get().getOverworld();
+                var rPotato = com.potatomc.bench.Microbench.run(world, fwl,
+                    com.potatomc.bench.Microbench.Engine.POTATO, fIters, fSeed);
+                var rVanilla = com.potatomc.bench.Microbench.run(world, fwl,
+                    com.potatomc.bench.Microbench.Engine.VANILLA, fIters, fSeed);
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("workload", fName);
+                out.put("iterations", fIters);
+                out.put("seed", fSeed);
+                out.put("potato", com.potatomc.bench.Microbench.resultToJson(rPotato));
+                out.put("vanilla", com.potatomc.bench.Microbench.resultToJson(rVanilla));
+                double speedup = rPotato.totalNanos() > 0
+                    ? (double) rVanilla.totalNanos() / (double) rPotato.totalNanos()
+                    : 0.0;
+                out.put("speedup_potato_over_vanilla", speedup);
+                return out;
+            }, 300_000);
+            HarnessServer.respond(ex, 200, Json.write(body));
+        } catch (Exception e) {
+            HarnessServer.respond(ex, 500, "{\"error\":\"" + e.getMessage() + "\"}");
+        }
     }
 
     private static void handleShutdown(HttpExchange ex) throws IOException {

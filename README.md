@@ -17,7 +17,31 @@ Réécriture complète du moteur de lumière (cible : 3-10× plus rapide que van
 - 🚧 Sky light (column rebuild + BFS, en cours)
 - 🚧 Threading workers (chunks distants → ForkJoinPool)
 - 🚧 Batch scheduler
-- 🚧 Microbench harness comparatif (vs vanilla / Starlight / Phosphor)
+- ✅ Microbench harness comparatif vs vanilla (voir « Benchmark results » ci-dessous)
+- 🚧 Comparatif Starlight / Phosphor (à venir)
+
+### Benchmark results — v0.1 baseline (premières mesures, seed=42)
+
+Mesures via `scripts/pmh bench <workload>` sur le même serveur headless, en routant la même charge soit dans notre moteur soit dans vanilla via `EngineHolder.runBypassed`. Latences en nanosecondes.
+
+| Workload              | Iters | Potato ops/s | Vanilla ops/s | Speedup | Potato p50 / p95 / p99 |
+|-----------------------|-------|--------------|---------------|---------|------------------------|
+| `single_block_update` | 200   | 16 893       | 74 902        | 0.23×   | 32k / 202k / 357k ns   |
+| `bulk_random_updates` | 100   | 3 324        | 139 738       | 0.02×   | 249k / 931k / 1 222k ns|
+| `full_chunk_relight`  | 50    | 550          | 85 812        | 0.006×  | 777k / 8 084k / 18 724k ns |
+
+**Lecture** : sur ces 3 workloads synthétiques, notre moteur est actuellement plus lent que vanilla (vanilla bénéficie de DEFERRED batching + années d'optims). C'est la baseline avant d'attaquer les chemins chauds : pooling de queues cross-section, batching différé du BFS, élimination des reads de validation, threading des chunks distants. Le harness est en place pour mesurer chaque pas.
+
+Reproduire :
+
+```bash
+scripts/pmh start
+scripts/pmh cmd 'forceload add -2 -2 2 2'
+scripts/pmh bench single_block_update 200 42
+scripts/pmh bench bulk_random_updates 100 42
+scripts/pmh bench full_chunk_relight 50 42
+# ou : scripts/test-bench.sh  (smoke test bout-en-bout)
+```
 
 ### PotatoHarness — outil de test autonome
 
